@@ -31,7 +31,7 @@ async function api(path, { method = 'GET', body, form } = {}) {
 }
 // Runs an admin action; on 409 asks to confirm and retries with force.
 async function act(path, body = {}, method = 'POST', okMsg) {
-  try { const r = await api(path, { method, body }); if (okMsg) toast(okMsg); await refresh(); return r; }
+  try { const r = await api(path, { method, body }); if (r && r.warning) toast(r.warning); else if (okMsg) toast(okMsg); await refresh(); return r; }
   catch (e) {
     if (e.status === 409 && !body.force) return new Promise((res) => confirmBox(e.message + ' Continue anyway?', 'Continue', async () => res(await act(path, { ...body, force: true }, method, okMsg))));
     toast(e.message);
@@ -292,7 +292,7 @@ function matchActions(m) {
   if (!S.user) return '';
   let a = '';
   if (canScore(m) && ((m.status === 'scheduled' && m.team_a && m.team_b) || m.status === 'live')) a += '<button class="btn small primary" data-act="console" data-id="' + m.id + '">' + (m.status === 'live' ? 'Score' : 'Score this match') + '</button>';
-  if (S.user.role === 'admin') a += '<button class="btn small" data-act="edit" data-id="' + m.id + '">Edit</button>';
+  if (S.user.role === 'admin') a += '<button class="btn small" data-act="edit" data-id="' + m.id + '">' + (m.status === 'done' ? 'Correct result' : 'Edit') + '</button>';
   return a ? '<span class="sp">' + a + '</span>' : '';
 }
 function matchHtml(m, tm = teamMap()) {
@@ -524,44 +524,108 @@ function adminEvent(p) {
   const kv = p.querySelector('#koView'); if (kv) kv.onclick = () => { S.fxEvent = ev; S.fxMode = 'knockout'; location.hash = '#fixtures'; };
 }
 
-// Matches
+// Matches: list, schedule table, manual matches and result corrections
+const KO_ROUNDS = ['Round of 32', 'Round of 16', 'Quarterfinal', 'Semifinal', 'Third place', 'Final'];
 function adminMatches(p) {
   const tm = teamMap();
-  const ms = D().matches.filter((m) => !S.matchEvent || m.event_key === S.matchEvent).sort((a, b) => a.event_key.localeCompare(b.event_key) || a.seq - b.seq);
-  p.innerHTML = '<div class="toolbar" style="margin-bottom:12px"><select id="mEv" aria-label="Event"><option value="">All events</option>' + D().eventKeys.map((k) => '<option ' + (k === S.matchEvent ? 'selected' : '') + '>' + esc(k) + '</option>').join('') + '</select><button class="btn primary small" id="newM">Add match</button><span style="font-size:13px;color:var(--muted)">Edit sets the court, start time, players or a corrected score.</span></div>' +
-    '<div class="matches">' + (ms.length ? ms.map((m) => matchHtml(m, tm)).join('') : '<div class="empty">No matches yet. Create them from Event setup.</div>') + '</div>';
+  const ms = D().matches.filter((m) => !S.matchEvent || m.event_key === S.matchEvent).sort((a, b) => a.event_key.localeCompare(b.event_key) || (a.stage === b.stage ? 0 : a.stage === 'league' ? -1 : 1) || a.seq - b.seq);
+  const mode = S.matchMode || 'schedule';
+  const officials = Object.entries(D().officials || {});
+  let body;
+  if (!ms.length) body = '<div class="empty">No matches yet. Create them from Event setup, or add one by hand.</div>';
+  else if (mode === 'list') body = '<div class="matches">' + ms.map((m) => matchHtml(m, tm)).join('') + '</div>';
+  else body = '<div class="table-wrap card" style="padding:0"><table class="std sched"><thead><tr><th>Match</th><th>Court</th><th>Start time</th><th>Umpire</th><th>Result</th><th></th></tr></thead><tbody>' + ms.map((m) => {
+    const [ga, gb] = tally(m);
+    const res = m.status === 'done' ? '<b>' + esc(teamName(m.winner, tm)) + '</b> ' + ga + '–' + gb + (m.result_note ? ' · ' + esc(m.result_note) : '') : m.status === 'live' ? '<span class="chip live">LIVE</span>' : m.status === 'bye' ? 'Bye' : '—';
+    return '<tr data-row="' + m.id + '"><td><div class="sm-teams">' + esc(teamName(m.team_a, tm)) + ' <span>vs</span> ' + esc(teamName(m.team_b, tm)) + '</div><div class="sub">' + esc(m.event_key) + ' · ' + esc(m.round_name) + '</div></td>' +
+      '<td><input type="text" data-f="court" value="' + esc(m.court) + '" aria-label="Court" style="width:70px"></td>' +
+      '<td><input type="datetime-local" data-f="startTime" value="' + esc(m.start_time) + '" aria-label="Start time"></td>' +
+      '<td><select data-f="umpireId" aria-label="Umpire"><option value="">—</option>' + officials.map(([id, n]) => '<option value="' + id + '" ' + (+id === m.umpire_id ? 'selected' : '') + '>' + esc(n) + '</option>').join('') + '</select></td>' +
+      '<td style="text-align:left">' + res + '</td><td><button class="btn small" data-act="edit" data-id="' + m.id + '">' + (m.status === 'done' ? 'Correct' : 'Edit') + '</button></td></tr>';
+  }).join('') + '</tbody></table></div>';
+  p.innerHTML = '<div class="toolbar" style="margin-bottom:12px"><select id="mEv" aria-label="Event"><option value="">All events</option>' + D().eventKeys.map((k) => '<option ' + (k === S.matchEvent ? 'selected' : '') + '>' + esc(k) + '</option>').join('') + '</select>' +
+    '<div class="pillbar" id="mMode"><button aria-pressed="' + (mode === 'schedule') + '" data-m="schedule">Schedule</button><button aria-pressed="' + (mode === 'list') + '" data-m="list">Cards</button></div>' +
+    '<button class="btn primary small" id="newL">Add league match</button><button class="btn primary small" id="newK">Add knockout match</button></div>' +
+    (mode === 'schedule' && ms.length ? '<p style="font-size:13px;color:var(--muted);margin-bottom:10px">Change courts, start times and umpires in the table, then Save schedule. Use Edit or Correct to change sides, format or the result.</p>' : '') + body +
+    (mode === 'schedule' && ms.length ? '<div class="toolbar" style="margin-top:12px"><button class="btn primary" id="saveSched">Save schedule</button><span class="msg" id="schedMsg"></span></div>' : '');
   p.querySelector('#mEv').onchange = (e) => { S.matchEvent = e.target.value; renderAdmin(); };
-  p.querySelector('#newM').onclick = () => matchEditor(null);
+  p.querySelector('#mMode').onclick = (e) => { const x = e.target.closest('button'); if (x) { S.matchMode = x.dataset.m; renderAdmin(); } };
+  p.querySelector('#newL').onclick = () => matchEditor(null, 'league');
+  p.querySelector('#newK').onclick = () => matchEditor(null, 'knockout');
+  const ss = p.querySelector('#saveSched');
+  if (ss) ss.onclick = async () => {
+    const changes = [];
+    $$('tr[data-row]', p).forEach((tr) => {
+      const m = D().matches.find((x) => x.id === +tr.dataset.row); if (!m) return;
+      const v = (f) => tr.querySelector('[data-f="' + f + '"]').value.trim();
+      const body = {};
+      if (v('court') !== (m.court || '')) body.court = v('court');
+      if (v('startTime') !== (m.start_time || '')) body.startTime = v('startTime');
+      if ((+v('umpireId') || null) !== (m.umpire_id || null)) body.umpireId = +v('umpireId') || null;
+      if (Object.keys(body).length) changes.push([m.id, body]);
+    });
+    const msg = p.querySelector('#schedMsg');
+    if (!changes.length) { msg.textContent = 'No changes to save.'; return; }
+    ss.disabled = true; msg.className = 'msg'; msg.textContent = 'Saving…';
+    try { for (const [id, body] of changes) await api('/api/admin/matches/' + id, { method: 'PATCH', body }); toast('Saved ' + changes.length + ' match' + (changes.length > 1 ? 'es' : '')); await refresh(); }
+    catch (er) { msg.className = 'msg err'; msg.textContent = er.message; ss.disabled = false; }
+  };
 }
-function matchEditor(m) {
+
+function matchEditor(m, newStage) {
   if (!S.user || S.user.role !== 'admin') return;
   const isNew = !m;
-  m = m || { event_key: S.matchEvent || S.adminEv || activeEvents()[0] || D().eventKeys[0], stage: 'knockout', round_name: 'Final', team_a: null, team_b: null, court: '', start_time: '', games: [], best_of: 3, status: 'scheduled' };
-  const opts = (ev, sel) => '<option value="">TBD</option>' + D().teams.filter((t) => t.event_key === ev).map((t) => '<option value="' + t.id + '" ' + (t.id === sel ? 'selected' : '') + '>' + esc(t.names.join(' / ')) + '</option>').join('');
-  const rows = Math.max(m.best_of || 1, (m.games || []).length);
-  const games = Array.from({ length: rows }, (_, i) => (m.games || [])[i] || ['', '']);
-  const md = modal('<h3>' + (isNew ? 'Add match' : 'Edit match') + '</h3>' +
-    (isNew ? '<div class="row"><label class="f">Event<select id="meEv">' + D().eventKeys.map((k) => '<option ' + (k === m.event_key ? 'selected' : '') + '>' + esc(k) + '</option>').join('') + '</select></label><label class="f">Stage<select id="meStage"><option value="knockout">Knockout</option><option value="league">League</option></select></label></div>' : '<p class="sub">' + esc(m.event_key) + ' · ' + esc(m.stage) + '</p>') +
-    '<label class="f">Round name<input type="text" id="meRound" value="' + esc(m.round_name) + '"></label>' +
-    '<div class="row"><label class="f">Side A<select id="meA">' + opts(m.event_key, m.team_a) + '</select></label><label class="f">Side B<select id="meB">' + opts(m.event_key, m.team_b) + '</select></label></div>' +
+  const tm = teamMap();
+  const evDefault = S.matchEvent || S.adminEv || activeEvents()[0] || D().eventKeys[0];
+  m = m || { event_key: evDefault, stage: newStage || 'knockout', grp: '', round_name: newStage === 'league' ? '' : 'Final', team_a: null, team_b: null, court: '', start_time: '', games: [], status: 'scheduled' };
+  if (isNew) { const f = fmtOf(m.event_key)[m.stage]; m.points = f.points; m.best_of = f.bestOf; m.cap = f.cap; }
+  const groupsOf = (ev) => [...new Set(D().teams.filter((t) => t.event_key === ev && t.grp).map((t) => t.grp))].sort();
+  const teamOpts = (ev, grp, sel) => '<option value="">TBD</option>' + D().teams.filter((t) => t.event_key === ev && (!grp || t.grp === grp)).map((t) => '<option value="' + t.id + '" ' + (t.id === sel ? 'selected' : '') + '>' + esc(t.names.join(' / ')) + (t.grp && !grp ? ' (Group ' + esc(t.grp) + ')' : '') + '</option>').join('');
+  const koOpts = (ev, sel) => '<option value="">Nowhere (last match, or decided later)</option>' + D().matches.filter((x) => x.event_key === ev && x.stage === 'knockout' && x.id !== m.id).map((x) => '<option value="' + x.id + '" ' + (x.id === sel ? 'selected' : '') + '>' + esc(x.round_name) + ': ' + esc(teamName(x.team_a, tm)) + ' vs ' + esc(teamName(x.team_b, tm)) + '</option>').join('');
+  const rows = Math.max(m.best_of || 1, (m.games || []).filter((g) => g[0] || g[1]).length || 0);
+  const games = Array.from({ length: Math.min(5, rows) }, (_, i) => (m.games || [])[i] || ['', '']);
+  const officials = Object.entries(D().officials || {});
+  const isLeague = m.stage === 'league';
+  const title = isNew ? (isLeague ? 'Add league match' : 'Add knockout match') : m.status === 'done' ? 'Correct result' : 'Edit match';
+  const md = modal('<h3>' + title + '</h3>' +
+    (isNew ? '<label class="f">Event<select id="meEv">' + D().eventKeys.map((k) => '<option ' + (k === m.event_key ? 'selected' : '') + '>' + esc(k) + '</option>').join('') + '</select></label>' : '<p class="sub">' + esc(m.event_key) + ' · ' + (isLeague ? 'League' : 'Knockout') + (m.status === 'done' ? ' · Finished' : m.status === 'live' ? ' · In play' : '') + '</p>') +
+    (isLeague ? '<label class="f">Group<select id="meGrp"></select></label>'
+      : '<label class="f">Round<select id="meRoundSel">' + KO_ROUNDS.map((r) => '<option ' + (r === m.round_name ? 'selected' : '') + '>' + r + '</option>').join('') + '<option value="__custom" ' + (KO_ROUNDS.includes(m.round_name) ? '' : 'selected') + '>Other…</option></select></label><label class="f" id="meRoundWrap"' + (KO_ROUNDS.includes(m.round_name) ? ' hidden' : '') + '>Round name<input type="text" id="meRound" value="' + esc(KO_ROUNDS.includes(m.round_name) ? '' : m.round_name) + '" placeholder="e.g. Plate final"></label>') +
+    '<div class="row"><label class="f">Side A<select id="meA"></select></label><label class="f">Side B<select id="meB"></select></label></div>' +
     '<div class="row"><label class="f">Court<input type="text" id="meCourt" value="' + esc(m.court) + '"></label><label class="f">Start time<input type="datetime-local" id="meTime" value="' + esc(m.start_time) + '"></label></div>' +
-    '<label class="f">Umpire <small>only this umpire can score it; scorers and admins always can</small><select id="meUmp"><option value="">Not assigned (any umpire can take it)</option>' +
-    Object.entries(D().officials || {}).map(([id, n]) => '<option value="' + id + '" ' + (+id === m.umpire_id ? 'selected' : '') + '>' + esc(n) + '</option>').join('') + '</select></label>' +
-    (isNew ? '' : '<fieldset><legend>Score (A – B), leave blank for games not played</legend>' + games.map((g, i) => '<div class="toolbar"><span style="width:64px">Game ' + (i + 1) + '</span><input type="number" min="0" max="99" data-g="' + i + '" data-s="0" value="' + g[0] + '" style="width:80px" aria-label="Game ' + (i + 1) + ' side A"><span>–</span><input type="number" min="0" max="99" data-g="' + i + '" data-s="1" value="' + g[1] + '" style="width:80px" aria-label="Game ' + (i + 1) + ' side B"></div>').join('') + '</fieldset>') +
-    '<div class="toolbar"><button class="btn primary" id="meSave">Save</button><button class="btn" data-close>Cancel</button>' + (isNew ? '' : '<button class="btn danger" id="meDel" style="margin-left:auto">Delete</button>') + '</div>');
-  if (isNew) md.querySelector('#meEv').onchange = (e) => { md.querySelector('#meA').innerHTML = opts(e.target.value); md.querySelector('#meB').innerHTML = opts(e.target.value); };
-  const origScore = JSON.stringify((m.games || []).filter((g) => g[0] || g[1]));
-  md.querySelector('#meSave').onclick = async () => {
-    const v = (s) => md.querySelector(s).value;
+    '<label class="f">Umpire <small>only this umpire can score it; scorers and admins always can</small><select id="meUmp"><option value="">Not assigned (any umpire can take it)</option>' + officials.map(([id, n]) => '<option value="' + id + '" ' + (+id === m.umpire_id ? 'selected' : '') + '>' + esc(n) + '</option>').join('') + '</select></label>' +
+    '<div class="row"><label class="f">Points per game<input type="number" id="mePts" min="5" max="51" value="' + m.points + '"></label><label class="f">Games<select id="meBo">' + [1, 3, 5].map((n) => '<option value="' + n + '" ' + (m.best_of === n ? 'selected' : '') + '>' + (n === 1 ? '1 game' : 'Best of ' + n) + '</option>').join('') + '</select></label></div>' +
+    (isLeague ? '' : '<div class="row"><label class="f">Winner goes to<select id="meNext">' + koOpts(m.event_key, m.next_match_id) + '</select></label><label class="f">As<select id="meSlot"><option value="a" ' + (m.next_slot !== 'b' ? 'selected' : '') + '>Side A</option><option value="b" ' + (m.next_slot === 'b' ? 'selected' : '') + '>Side B</option></select></label></div>') +
+    (isNew ? '' : '<fieldset class="result-edit"><legend>Result</legend><p class="sub">Enter each game\'s score (A – B). Leave unplayed games blank.</p>' + games.map((g, i) => '<div class="toolbar"><span style="width:64px">Game ' + (i + 1) + '</span><input type="number" min="0" max="99" data-g="' + i + '" data-s="0" value="' + g[0] + '" style="width:80px" aria-label="Game ' + (i + 1) + ' side A"><span>–</span><input type="number" min="0" max="99" data-g="' + i + '" data-s="1" value="' + g[1] + '" style="width:80px" aria-label="Game ' + (i + 1) + ' side B"></div>').join('') +
+      '<div class="row"><label class="f">Winner<select id="meWin"><option value="auto">Work out from the score</option><option value="a" ' + (m.winner && m.winner === m.team_a && m.result_note ? 'selected' : '') + '>Side A (walkover / retired)</option><option value="b" ' + (m.winner && m.winner === m.team_b && m.result_note ? 'selected' : '') + '>Side B (walkover / retired)</option></select></label><label class="f">Note <small>shown with the result</small><input type="text" id="meNote" value="' + esc(m.result_note || '') + '" placeholder="e.g. Walkover, Retired"></label></div>' +
+      '<p class="sub">Saving recalculates the points table. For knockouts, the corrected winner moves into the next round if that match has not started.</p></fieldset>') +
+    '<div class="toolbar"><button class="btn primary" id="meSave">' + (isNew ? 'Add match' : 'Save') + '</button><button class="btn" data-close>Cancel</button>' +
+    (isNew ? '' : (m.status !== 'scheduled' ? '<button class="btn small" id="meReset">Reset to not played</button>' : '') + '<button class="btn danger small" id="meDel" style="margin-left:auto">Delete</button>') + '</div>');
+  const q = (sel) => md.querySelector(sel);
+  const ev = () => (q('#meEv') ? q('#meEv').value : m.event_key);
+  const fillGroups = () => { if (!isLeague) return; const gs = groupsOf(ev()); const cur = m.grp || gs[0] || ''; q('#meGrp').innerHTML = gs.length ? gs.map((g) => '<option ' + (g === cur ? 'selected' : '') + '>' + g + '</option>').join('') : '<option value="">No groups yet: draw groups in Event setup</option>'; };
+  const fillTeams = () => { const grp = isLeague ? q('#meGrp').value : ''; q('#meA').innerHTML = teamOpts(ev(), grp, m.team_a); q('#meB').innerHTML = teamOpts(ev(), grp, m.team_b); };
+  fillGroups(); fillTeams();
+  if (q('#meEv')) q('#meEv').onchange = () => { m.team_a = m.team_b = null; m.grp = ''; const f = fmtOf(ev())[m.stage]; q('#mePts').value = f.points; q('#meBo').value = f.bestOf; fillGroups(); fillTeams(); if (q('#meNext')) q('#meNext').innerHTML = koOpts(ev(), null); };
+  if (q('#meGrp')) q('#meGrp').onchange = () => { m.team_a = m.team_b = null; fillTeams(); };
+  if (q('#meRoundSel')) q('#meRoundSel').onchange = (e) => { q('#meRoundWrap').hidden = e.target.value !== '__custom'; };
+  q('#meSave').onclick = async () => {
+    const roundName = isLeague ? undefined : (q('#meRoundSel').value === '__custom' ? q('#meRound').value.trim() : q('#meRoundSel').value);
+    const body = { teamA: +q('#meA').value || null, teamB: +q('#meB').value || null, court: q('#meCourt').value.trim(), startTime: q('#meTime').value, umpireId: +q('#meUmp').value || null, points: +q('#mePts').value, bestOf: +q('#meBo').value };
+    if (isLeague) body.group = q('#meGrp').value; else { body.roundName = roundName; body.nextMatchId = +q('#meNext').value || null; body.nextSlot = q('#meSlot').value; }
+    if (isNew) {
+      if (isLeague && !body.group) { toast('Draw groups in Event setup first, then add the match.'); return; }
+      closeModal(); return act('/api/admin/matches', { ...body, eventKey: ev(), stage: m.stage }, 'POST', 'Match added');
+    }
+    const g = games.map((_, i) => [q('[data-g="' + i + '"][data-s="0"]').value, q('[data-g="' + i + '"][data-s="1"]').value]).filter((x) => x[0] !== '' || x[1] !== '').map((x) => [+x[0] || 0, +x[1] || 0]);
+    const win = q('#meWin').value, note = q('#meNote').value.trim();
+    const changedResult = JSON.stringify(g) !== JSON.stringify((m.games || []).filter((x) => x[0] || x[1])) || win !== 'auto' || note !== (m.result_note || '');
+    if (changedResult) { body.games = g; body.winner = win; body.resultNote = win === 'auto' ? note : (note || 'Walkover'); }
     closeModal();
-    if (isNew) return act('/api/admin/matches', { eventKey: v('#meEv'), stage: v('#meStage'), roundName: v('#meRound'), teamA: +v('#meA') || null, teamB: +v('#meB') || null, court: v('#meCourt'), startTime: v('#meTime'), umpireId: +v('#meUmp') || null }, 'POST', 'Match added');
-    const body = { roundName: v('#meRound'), teamA: +v('#meA') || null, teamB: +v('#meB') || null, court: v('#meCourt'), startTime: v('#meTime'), umpireId: +v('#meUmp') || null };
-    const g = games.map((_, i) => [md.querySelector('[data-g="' + i + '"][data-s="0"]').value, md.querySelector('[data-g="' + i + '"][data-s="1"]').value]).filter((x) => x[0] !== '' || x[1] !== '').map((x) => [+x[0] || 0, +x[1] || 0]);
-    if (JSON.stringify(g) !== origScore) body.games = g;
-    act('/api/admin/matches/' + m.id, body, 'PATCH', 'Match saved');
+    act('/api/admin/matches/' + m.id, body, 'PATCH', changedResult ? 'Result saved. Points table updated.' : 'Match saved');
   };
-  const del = md.querySelector('#meDel');
-  if (del) del.onclick = () => { closeModal(); confirmBox('Delete this match?', 'Delete match', () => act('/api/admin/matches/' + m.id, {}, 'DELETE', 'Match deleted')); };
+  const rs = q('#meReset'); if (rs) rs.onclick = () => { closeModal(); confirmBox('Clear the score and mark this match as not played? The points table updates straight away.', 'Reset match', () => act('/api/admin/matches/' + m.id, { reset: true }, 'PATCH', 'Match reset to not played')); };
+  const del = q('#meDel'); if (del) del.onclick = () => { closeModal(); confirmBox('Delete this match?', 'Delete match', () => act('/api/admin/matches/' + m.id, {}, 'DELETE', 'Match deleted')); };
 }
 
 // Settings

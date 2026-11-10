@@ -60,6 +60,13 @@ Alternative without GitHub: install the Railway CLI, run `railway login`, `railw
 
 Standings: 2 points per win, then wins, game difference, point difference, head-to-head.
 
+
+### Manual scheduling and corrections (Admin → Matches)
+- **Schedule** view: set court, start time and umpire for every match in one table, then **Save schedule**.
+- **Add league match**: pick event, group and two sides from that group; optional points/games override.
+- **Add knockout match**: pick a round (Round of 32 … Final, Third place, or a custom name), the sides, and where the winner goes (next match, side A or B).
+- **Correct result**: edit game scores, or set the winner directly for a walkover/retirement with a note. Standings recalculate immediately; a corrected knockout winner moves into the next round if that match hasn't started (otherwise you get a warning). **Reset to not played** clears a result.
+
 ## Security notes
 
 - Passwords are hashed with bcrypt. Sessions are random tokens stored hashed, in an HttpOnly, SameSite=Lax cookie (Secure on HTTPS).

@@ -263,3 +263,12 @@ img{max-width:100%}
 .foot{display:grid;gap:8px}
 .foot-legal{font-size:12px;color:var(--muted)}
 .foot-legal .copyable{color:var(--ink)}
+
+/* schedule table */
+table.sched td{vertical-align:middle;text-align:left}
+table.sched input,table.sched select{width:auto;padding:6px 8px;font-size:13px}
+table.sched .sm-teams{font-weight:600}
+table.sched .sm-teams span{color:var(--muted);font-weight:400;font-size:12px}
+table.sched .sub{font-size:12px;color:var(--muted)}
+.result-edit{border:1px solid var(--line);border-radius:8px;padding:12px;display:grid;gap:8px}
+table.sched th{text-align:left}

@@ -667,22 +667,62 @@ async function propagate(c, matchId, winner) {
 }
 
 // ---------- admin: matches ----------
+// Manual scheduling: admins can add league or knockout matches by hand, and edit any match
+// (sides, group, round, court, time, umpire, scoring format, where the winner goes, and the result).
+const ROUND_ORDER = { 'Round of 32': 1, 'Round of 16': 2, Quarterfinal: 3, Semifinal: 4, 'Third place': 5, Final: 6 };
+function readFormat(b, fallback) {
+  const points = parseInt(b.points, 10), bestOf = parseInt(b.bestOf, 10), cap = parseInt(b.cap, 10);
+  const f = { ...fallback };
+  if (Number.isFinite(points) && points >= 5 && points <= 51) { f.points = points; f.cap = Math.max(points, T.capFor(points)); }
+  if ([1, 3, 5].includes(bestOf)) f.bestOf = bestOf;
+  if (Number.isFinite(cap) && cap >= f.points && cap <= 99) f.cap = cap;
+  return f;
+}
+async function checkTeams(c, ek, a, bb) {
+  if (a && bb && a === bb) throw bad('A side cannot play itself.');
+  for (const id of [a, bb].filter(Boolean)) {
+    const t = (await c.query('SELECT event_key FROM teams WHERE id=$1', [id])).rows[0];
+    if (!t || t.event_key !== ek) throw bad('Both sides must be entries in ' + ek + '.');
+  }
+}
+async function checkNext(c, m, nextId) {
+  if (!nextId) return null;
+  const n = (await c.query('SELECT id, event_key, stage FROM matches WHERE id=$1', [nextId])).rows[0];
+  if (!n || n.id === m.id || n.event_key !== m.event_key || n.stage !== 'knockout') throw bad('The winner can only move into another knockout match in the same event.');
+  return n.id;
+}
+
 admin.post('/matches', ah(async (req, res) => {
   const b = req.body || {};
   if (!T.EVENT_KEYS.includes(b.eventKey)) throw bad('Unknown event.');
   const stage = b.stage === 'league' ? 'league' : 'knockout';
-  const f = T.formatFor(await getSettings(), b.eventKey)[stage];
-  await q(
-    `INSERT INTO matches (event_key, stage, grp, round_name, team_a, team_b, court, start_time, points, best_of, cap, seq, umpire_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-    [b.eventKey, stage, str(b.group, 4).toUpperCase(), str(b.roundName, 40) || (stage === 'knockout' ? 'Knockout' : ''), b.teamA || null, b.teamB || null, str(b.court, 20), str(b.startTime, 30), f.points, f.bestOf, f.cap, 50000 + Math.floor(Date.now() / 1000) % 40000, b.umpireId ? +b.umpireId : null],
-  );
+  const grp = str(b.group, 4).toUpperCase();
+  if (stage === 'league' && !grp) throw bad('Pick the group this league match belongs to.');
+  const f = readFormat(b, T.formatFor(await getSettings(), b.eventKey)[stage]);
+  const roundName = str(b.roundName, 40) || (stage === 'knockout' ? 'Knockout' : `Group ${grp}`);
+  const teamA = b.teamA ? +b.teamA : null, teamB = b.teamB ? +b.teamB : null;
+  const id = await tx(async (c) => {
+    await checkTeams(c, b.eventKey, teamA, teamB);
+    const seqBase = stage === 'knockout' ? 20000 + (ROUND_ORDER[roundName] || 3) * 1000 : 30000;
+    const seq = seqBase + (await c.query('SELECT count(*)::int AS n FROM matches WHERE event_key=$1', [b.eventKey])).rows[0].n;
+    const row = (await c.query(
+      `INSERT INTO matches (event_key, stage, grp, round_name, team_a, team_b, court, start_time, points, best_of, cap, seq, umpire_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
+      [b.eventKey, stage, stage === 'league' ? grp : '', roundName, teamA, teamB, str(b.court, 20), str(b.startTime, 30), f.points, f.bestOf, f.cap, seq, b.umpireId ? +b.umpireId : null],
+    )).rows[0];
+    if (stage === 'knockout' && b.nextMatchId) {
+      const nid = await checkNext(c, { id: row.id, event_key: b.eventKey }, +b.nextMatchId);
+      await c.query('UPDATE matches SET next_match_id=$1, next_slot=$2 WHERE id=$3', [nid, b.nextSlot === 'b' ? 'b' : 'a', row.id]);
+    }
+    return row.id;
+  });
   broadcast();
-  res.json({ ok: true });
+  res.json({ ok: true, id });
 }));
 
 admin.patch('/matches/:id', ah(async (req, res) => {
   const b = req.body || {};
+  let warning = '';
   await tx(async (c) => {
     const m = (await c.query('SELECT * FROM matches WHERE id=$1 FOR UPDATE', [+req.params.id])).rows[0];
     if (!m) throw new HttpError(404, 'Match not found.');
@@ -690,26 +730,46 @@ admin.patch('/matches/:id', ah(async (req, res) => {
     if ('court' in b) next.court = str(b.court, 20);
     if ('startTime' in b) next.start_time = str(b.startTime, 30);
     if ('roundName' in b) next.round_name = str(b.roundName, 40);
+    if ('group' in b && m.stage === 'league') next.grp = str(b.group, 4).toUpperCase() || m.grp;
     if ('teamA' in b) next.team_a = b.teamA ? +b.teamA : null;
     if ('teamB' in b) next.team_b = b.teamB ? +b.teamB : null;
     if ('umpireId' in b) next.umpire_id = b.umpireId ? +b.umpireId : null;
-    if (Array.isArray(b.games)) {
-      next.games = b.games.map((g) => [Math.max(0, Math.min(99, +g[0] || 0)), Math.max(0, Math.min(99, +g[1] || 0))]).slice(0, 5);
+    await checkTeams(c, m.event_key, next.team_a, next.team_b);
+    if ('points' in b || 'bestOf' in b || 'cap' in b) Object.assign(next, (({ points, bestOf, cap }) => ({ points, best_of: bestOf, cap }))(readFormat(b, { points: m.points, bestOf: m.best_of, cap: m.cap })));
+    if (m.stage === 'knockout' && 'nextMatchId' in b) {
+      next.next_match_id = await checkNext(c, m, b.nextMatchId ? +b.nextMatchId : null);
+      next.next_slot = next.next_match_id ? (b.nextSlot === 'b' ? 'b' : 'a') : null;
+    }
+    if (b.reset) {
+      // Back to not played: clears the score and result.
+      Object.assign(next, { games: [], history: [], winner: null, status: 'scheduled', result_note: '', server: null });
+    } else if (Array.isArray(b.games) || b.winner !== undefined) {
+      if (Array.isArray(b.games)) next.games = b.games.map((g) => [Math.max(0, Math.min(99, +g[0] || 0)), Math.max(0, Math.min(99, +g[1] || 0))]).slice(0, 5);
       next.history = [];
-      const w = T.winnerFromGames(next, next.games);
+      // winner: 'auto' (from the score), 'a' / 'b' (override, e.g. walkover or retired), or '' (no result yet)
+      const w = b.winner === 'a' ? next.team_a : b.winner === 'b' ? next.team_b : b.winner === '' ? null : T.winnerFromGames(next, next.games);
+      if ((b.winner === 'a' || b.winner === 'b') && !w) throw bad('Pick both sides before setting a winner.');
       next.winner = w;
       next.status = w ? 'done' : next.games.length ? 'live' : 'scheduled';
-      next.result_note = '';
+      next.result_note = w ? str(b.resultNote, 40) : '';
+      if (b.winner === 'auto' && next.games.length && !w) warning = 'The score does not decide a winner yet, so the match is marked as in play.';
     }
-    if (b.status && ['scheduled', 'live', 'done'].includes(b.status) && !Array.isArray(b.games)) next.status = b.status;
     await c.query(
-      'UPDATE matches SET court=$1, start_time=$2, round_name=$3, team_a=$4, team_b=$5, games=$6, history=$7, winner=$8, status=$9, finished_at=CASE WHEN $9=\'done\' THEN now() ELSE NULL END, umpire_id=$11, result_note=$12, scored_by=$13, updated_at=now() WHERE id=$10',
-      [next.court, next.start_time, next.round_name, next.team_a, next.team_b, JSON.stringify(next.games), JSON.stringify(next.history || []), next.winner, next.status, m.id, next.umpire_id, next.result_note || '', req.user.id],
+      `UPDATE matches SET court=$1, start_time=$2, round_name=$3, team_a=$4, team_b=$5, games=$6, history=$7, winner=$8, status=$9,
+       finished_at=CASE WHEN $9='done' THEN COALESCE(finished_at, now()) ELSE NULL END, umpire_id=$11, result_note=$12, scored_by=$13,
+       grp=$14, points=$15, best_of=$16, cap=$17, next_match_id=$18, next_slot=$19, server=$20, updated_at=now() WHERE id=$10`,
+      [next.court, next.start_time, next.round_name, next.team_a, next.team_b, JSON.stringify(next.games), JSON.stringify(next.history || []), next.winner, next.status, m.id,
+        next.umpire_id, next.result_note || '', req.user.id, next.grp, next.points, next.best_of, next.cap, next.next_match_id, next.next_slot, next.server],
     );
-    if (next.status === 'done' && next.winner) await propagate(c, m.id, next.winner);
+    // Keep the knockout bracket in step when a corrected result changes who goes through.
+    if (next.next_match_id && next.winner !== m.winner) {
+      const nm = (await c.query('SELECT status FROM matches WHERE id=$1', [next.next_match_id])).rows[0];
+      if (nm && nm.status !== 'scheduled') warning = 'The next-round match has already started, so it was not changed. Edit it by hand if the wrong side is in it.';
+      await propagate(c, m.id, next.status === 'done' ? next.winner : null);
+    }
   });
   broadcast();
-  res.json({ ok: true });
+  res.json({ ok: true, warning });
 }));
 
 admin.delete('/matches/:id', ah(async (req, res) => {
