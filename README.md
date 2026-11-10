@@ -3,7 +3,7 @@
 Tournament site with player registration, group draws, league and knockout stages, and live scoring.
 
 - **Home**: tournament details, countdown, badminton GIF, events, rules, schedule, prizes. Everything is editable from Admin → Settings.
-- **Register**: Men / Women / Kids → Singles / Doubles / Mixed doubles, partner details or "committee will assign", photo, payment screenshot, about the player.
+- **Register**: Men / Women (Singles, Doubles, Mixed doubles) and Kids – Boys / Kids – Girls (Singles, Doubles), partner details or "committee will assign", photo, payment screenshot, about the player.
 - **Fixtures**: group standings, league matches, knockout bracket, player cards.
 - **Live**: courts in play, updated for every viewer as points are scored.
 - **Admin**: first-run setup, registrations review, partner pairing, per-event formats, groups (automatic or manual), league generation, knockout generation, match editing, users.

@@ -67,7 +67,9 @@ async function saveFile(file, isPrivate, db = { query: q }) {
 
 async function getSettings() {
   const r = await q("SELECT value FROM settings WHERE key='tournament'");
-  return { ...DEFAULT_SETTINGS, ...(r.rows[0] ? r.rows[0].value : {}) };
+  const s = { ...DEFAULT_SETTINGS, ...(r.rows[0] ? r.rows[0].value : {}) };
+  s.events = T.normalizeEvents(s.events);
+  return s;
 }
 async function saveSettings(s) {
   await q("INSERT INTO settings (key, value) VALUES ('tournament', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", [s]);
@@ -230,7 +232,7 @@ app.get('/api/state', ah(async (req, res) => {
   res.set('Cache-Control', 'no-store');
   const officials = {};
   (await q("SELECT id, username, display_name FROM users WHERE role IN ('umpire','scorer')")).rows.forEach((u) => { officials[u.id] = u.display_name || u.username; });
-  res.json({ settings: pub, formats, teams, matches, players: regs, standings: computeStandings(teams, matches), eventKeys: T.EVENT_KEYS, officials });
+  res.json({ settings: pub, formats, teams, matches, players: regs, standings: computeStandings(teams, matches), eventKeys: T.EVENT_KEYS, categories: T.CATEGORIES, categoryLabels: T.CATEGORY_LABELS, officials });
 }));
 
 app.get('/api/stream', (req, res) => {
@@ -258,7 +260,7 @@ app.post('/api/register', limiter(20, 60 * 60e3), upload.fields([{ name: 'photo'
   if (s.regDeadline && new Date(`${s.regDeadline}T23:59:59`) < new Date()) throw bad('The registration deadline has passed.');
   const b = req.body || {};
   const category = str(b.category, 20), event = str(b.event, 20);
-  if (!(s.events[category] || []).includes(event)) throw bad('Pick a category and an event that are open for registration.');
+  if (!T.eventAllowed(category, event) || !(s.events[category] || []).includes(event)) throw bad('Pick a category and an event that are open for registration.');
   const first = str(b.firstName, 60), last = str(b.lastName, 60);
   if (!first || !last) throw bad('Enter your first and last name.');
   const mobile = digits(b.mobile);
@@ -301,6 +303,7 @@ admin.put('/settings', ah(async (req, res) => {
     for (const [cat, list] of Object.entries(T.CATEGORIES)) ev[cat] = list.filter((e) => (b.events[cat] || []).includes(e));
     s.events = ev;
   }
+  if (s.regOpen && !Object.values(s.events || {}).some((l) => l.length)) throw bad('Tick at least one event under "Events open for registration", or turn off Registrations open.');
   await saveSettings(s);
   broadcast();
   res.json({ ok: true });

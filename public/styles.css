@@ -245,3 +245,7 @@ img{max-width:100%}
 .result-card{display:grid;gap:10px;max-width:640px}
 .result-card h2{font-size:clamp(30px,6vw,48px)}
 @media (max-width:600px){.console{grid-template-columns:1fr}.tap{min-height:30vh}.serve-pick{grid-template-columns:1fr}}
+
+/* checkbox toggles show their state with a mark, not just colour */
+.seg input[type=checkbox]+span::before{content:"";display:inline-block;width:14px;height:14px;margin-right:8px;vertical-align:-2px;border:1.5px solid currentColor;border-radius:3px}
+.seg input[type=checkbox]:checked+span::before{content:"✓";line-height:12px;text-align:center;font-size:12px;font-weight:800}

@@ -156,7 +156,7 @@ function renderHome() {
   $('#hStats').innerHTML = [[ps.length, 'Registrations'], [D().teams.length, 'Confirmed entries'], [ms.filter((m) => m.status === 'done').length + ' / ' + ms.length, 'Matches played']]
     .map(([n, l]) => '<div><b class="tab-num">' + esc(n) + '</b><span>' + esc(l) + '</span></div>').join('');
   $('#hFee').textContent = c.fee || '';
-  $('#hEvents').innerHTML = Object.entries(c.events || {}).filter(([, evs]) => evs.length).map(([cat, evs]) => '<div class="event-card"><h3>' + esc(cat) + '</h3><div class="chips">' +
+  $('#hEvents').innerHTML = Object.entries(c.events || {}).filter(([, evs]) => evs.length).map(([cat, evs]) => '<div class="event-card"><h3>' + esc((D().categoryLabels || {})[cat] || cat) + '</h3><div class="chips">' +
     evs.map((e) => '<span class="chip">' + esc(e) + ' · ' + ps.filter((x) => x.category === cat && x.event === e).length + '</span>').join('') + '</div></div>').join('');
   $('#hAbout').textContent = c.about || '';
   const li = (t) => lines(t).map((l, i) => { const p = l.split(' · '); return '<li><span class="k">' + (p.length > 1 ? '' : String(i + 1).padStart(2, '0')) + '</span><span>' + (p.length > 1 ? '<b>' + esc(p[0]) + '</b> · ' + esc(p.slice(1).join(' · ')) : esc(l)) + '</span></li>'; }).join('');
@@ -171,6 +171,7 @@ function regGate() {
   const c = D().settings;
   if (!S.data) return '<p class="note">Loading…</p>';
   if (!c.regOpen) return '<p class="note warn">Registrations are closed. Contact the committee if you need help.</p>';
+  if (!Object.values(c.events || {}).some((l) => l && l.length)) return '<p class="note warn">No events are open for registration yet.' + (S.user && S.user.role === 'admin' ? ' Open them in Admin → Settings → Events open for registration, then Save settings.' : ' Check back soon or contact the committee.') + '</p>';
   if (c.regDeadline && new Date(c.regDeadline + 'T23:59:59') < new Date()) return '<p class="note warn">The registration deadline has passed.</p>';
   return '';
 }
@@ -207,7 +208,7 @@ $('#regForm').addEventListener('submit', async (ev) => {
   const v = (id) => $(id).value.trim();
   const cat = ($('input[name=cat]:checked') || {}).value, evt = ($('input[name=evt]:checked') || {}).value, hp = ($('input[name=haspartner]:checked') || {}).value;
   const err = (t) => { msg.className = 'msg err'; msg.textContent = t; };
-  if (!cat) return err('Pick a category: Men, Women or Kids.');
+  if (!cat) return err('Pick a category: Men, Women, Kids – Boys or Kids – Girls.');
   if (!evt) return err('Pick an event.');
   if (!v('#fFirst') || !v('#fLast')) return err('Enter your first and last name.');
   if (v('#fMobile').replace(/\D/g, '').length < 10) return err('Enter a mobile number with at least 10 digits.');
@@ -544,14 +545,15 @@ function adminSettings(p) {
   const c = D().settings;
   const f = (id, label, val, type = 'text', hint = '') => '<label class="f">' + label + (hint ? ' <small>' + hint + '</small>' : '') + '<input type="' + type + '" id="' + id + '" value="' + esc(val || '') + '"></label>';
   const ta = (id, label, val, hint = '') => '<label class="f">' + label + (hint ? ' <small>' + hint + '</small>' : '') + '<textarea id="' + id + '">' + esc(val || '') + '</textarea></label>';
-  const cats = { Men: ['Singles', 'Doubles', 'Mixed Doubles'], Women: ['Singles', 'Doubles', 'Mixed Doubles'], Kids: ['Singles', 'Doubles'] };
+  const cats = D().categories || {};
+  const catLabel = (k) => (D().categoryLabels || {})[k] || k;
   p.innerHTML = '<form class="card form" id="cfgForm"><h3>Home page</h3><div class="row">' + f('cName', 'Tournament name', c.name) + f('cEyebrow', 'Small heading', c.eyebrow) + '</div>' + ta('cTag', 'Tagline', c.tagline) +
     '<div class="row">' + f('cStart', 'Start date and time', c.startDate, 'datetime-local', 'drives the countdown') + f('cDateText', 'Dates as shown', c.dateText, 'text', 'e.g. 14–16 Nov 2026') + '</div>' +
     '<div class="row">' + f('cVenue', 'Venue', c.venue) + f('cDeadline', 'Registration closes', c.regDeadline, 'date') + '</div>' + ta('cAbout', 'About the tournament', c.about) +
     ta('cRules', 'Format & rules', c.rules, 'one per line') + ta('cSchedule', 'Schedule', c.schedule, "one per line; use ' · ' between day and detail") + ta('cPrizes', 'Prizes', c.prizes, 'one per line') +
     '<div class="row">' + f('cContact', 'Contact name', c.contactName) + f('cPhone', 'Contact phone', c.contactPhone, 'tel') + '</div>' +
     '<h3 style="margin-top:8px">Registration &amp; payment</h3><div class="row">' + f('cFee', 'Fee text', c.fee) + f('cUpi', 'UPI ID', c.upiId) + '</div>' + f('cPayNote', 'Payment instructions', c.payNote) +
-    '<fieldset><legend>Events open for registration</legend><div class="seg">' + Object.entries(cats).flatMap(([cat, evs]) => evs.map((e) => { const on = ((c.events || {})[cat] || []).includes(e); return '<label><input type="checkbox" data-cat="' + cat + '" data-evt="' + e + '" ' + (on ? 'checked' : '') + '><span>' + cat + ' · ' + e + '</span></label>'; })).join('') + '</div></fieldset>' +
+    '<fieldset><legend>Events open for registration</legend><div class="seg">' + Object.entries(cats).flatMap(([cat, evs]) => evs.map((e) => { const on = ((c.events || {})[cat] || []).includes(e); return '<label><input type="checkbox" data-cat="' + cat + '" data-evt="' + e + '" ' + (on ? 'checked' : '') + '><span>' + esc(catLabel(cat)) + ' · ' + e + '</span></label>'; })).join('') + '</div></fieldset>' +
     '<label class="f" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="cOpen" ' + (c.regOpen ? 'checked' : '') + '> Registrations open</label>' +
     '<div class="toolbar"><button class="btn primary">Save settings</button><span class="msg" id="cfgMsg"></span></div></form>' +
     '<div class="card form" style="margin-top:16px"><h3>Images</h3><div class="row"><div style="display:grid;gap:8px"><b>Home page GIF</b><label class="drop" for="upGif">' + (c.gifId ? '<img src="' + fileUrl(c.gifId) + '" alt="">' : '') + '<span>' + (c.gifId ? 'Replace GIF' : 'Upload your badminton GIF (up to 15 MB)') + '</span><input type="file" id="upGif" accept="image/gif,image/png,image/jpeg,image/webp"></label>' + (c.gifId ? '<button class="btn small" id="rmGif" style="justify-self:start">Remove GIF</button>' : '') + '</div>' +
@@ -559,7 +561,7 @@ function adminSettings(p) {
   const v = (s) => p.querySelector(s).value.trim();
   p.querySelector('#cfgForm').onsubmit = (e) => {
     e.preventDefault();
-    const events = { Men: [], Women: [], Kids: [] };
+    const events = {}; Object.keys(cats).forEach((k) => { events[k] = []; });
     $$('[data-cat]', p).forEach((cb) => { if (cb.checked) events[cb.dataset.cat].push(cb.dataset.evt); });
     act('/api/admin/settings', { name: v('#cName'), eyebrow: v('#cEyebrow'), tagline: v('#cTag'), startDate: v('#cStart'), dateText: v('#cDateText'), venue: v('#cVenue'), regDeadline: v('#cDeadline'), about: p.querySelector('#cAbout').value, rules: p.querySelector('#cRules').value, schedule: p.querySelector('#cSchedule').value, prizes: p.querySelector('#cPrizes').value, contactName: v('#cContact'), contactPhone: v('#cPhone'), fee: v('#cFee'), upiId: v('#cUpi'), payNote: v('#cPayNote'), events, regOpen: p.querySelector('#cOpen').checked }, 'PUT', 'Settings saved');
   };
