@@ -693,7 +693,11 @@ app.use('/api/score', score);
 
 // ---------- static & errors ----------
 // index.html is served with the configured tournament name filled in, so the tab title and header are right before the page script runs.
-const INDEX_TEMPLATE = require('fs').readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
+// Each deploy gets a new version tag so browsers fetch the new app.js and styles.css instead of a cached copy.
+const BUILD = Date.now().toString(36);
+const INDEX_TEMPLATE = require('fs').readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8')
+  .replace('src="/app.js"', `src="/app.js?v=${BUILD}"`)
+  .replace('href="/styles.css"', `href="/styles.css?v=${BUILD}"`);
 const htmlEsc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const sendIndex = ah(async (req, res) => {
   const s = await getSettings();
