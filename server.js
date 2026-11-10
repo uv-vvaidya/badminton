@@ -22,6 +22,7 @@ const DEFAULT_SETTINGS = {
   schedule: 'Day 1 · League matches\nDay 2 · Knockouts\nDay 3 · Finals and prize ceremony',
   prizes: 'Winners · Trophy and medals\nRunners-up · Medals',
   contactName: 'Tournament committee', contactPhone: '', upiId: '',
+  footerEmail: process.env.FOOTER_EMAIL || 'varadarajrv@gmail.com',
   payNote: 'Pay the entry fee by UPI, then upload the screenshot below.',
   qrId: '', gifId: '', regOpen: true,
   events: T.CATEGORIES,
@@ -76,16 +77,40 @@ async function saveSettings(s) {
 }
 
 // ---------- live updates (Server-Sent Events) ----------
-const clients = new Set();
+// Each open page holds one stream. We also track which tab it is on, to show how many are watching.
+const clients = new Map(); // res -> { cid, view }
 let pending = null;
 function broadcast() {
   if (pending) return;
   pending = setTimeout(() => {
     pending = null;
-    for (const res of clients) res.write(`event: state\ndata: ${Date.now()}\n\n`);
+    for (const res of clients.keys()) res.write(`event: state\ndata: ${Date.now()}\n\n`);
   }, 120);
 }
-setInterval(() => { for (const res of clients) res.write(': ping\n\n'); }, 25000).unref();
+setInterval(() => { for (const res of clients.keys()) res.write(': ping\n\n'); }, 25000).unref();
+
+// ---------- audience: watching now + page views ----------
+const stats = { views: 0, visitors: 0 };
+async function loadStats() {
+  const r = await q('SELECT (SELECT COALESCE(sum(views),0) FROM page_views)::int AS views, (SELECT count(*) FROM visitors)::int AS visitors');
+  Object.assign(stats, r.rows[0]);
+}
+function presence() {
+  const tabs = new Set(), live = new Set();
+  for (const c of clients.values()) { tabs.add(c.cid); if (c.view === 'live' || c.view === 'fixtures') live.add(c.cid); }
+  return { online: tabs.size, live: live.size, views: stats.views, visitors: stats.visitors };
+}
+let presTimer = null;
+function broadcastPresence() {
+  if (presTimer) return;
+  presTimer = setTimeout(() => {
+    presTimer = null;
+    const msg = `event: presence\ndata: ${JSON.stringify(presence())}\n\n`;
+    for (const res of clients.keys()) res.write(msg);
+  }, 1000);
+}
+const VIEW_NAMES = ['home', 'register', 'fixtures', 'live', 'score', 'admin'];
+const cleanId = (v) => (/^[a-z0-9]{8,40}$/.test(String(v || '')) ? String(v) : null);
 
 // ---------- app ----------
 const app = express();
@@ -232,16 +257,43 @@ app.get('/api/state', ah(async (req, res) => {
   res.set('Cache-Control', 'no-store');
   const officials = {};
   (await q("SELECT id, username, display_name FROM users WHERE role IN ('umpire','scorer')")).rows.forEach((u) => { officials[u.id] = u.display_name || u.username; });
-  res.json({ settings: pub, formats, teams, matches, players: regs, standings: computeStandings(teams, matches), eventKeys: T.EVENT_KEYS, categories: T.CATEGORIES, categoryLabels: T.CATEGORY_LABELS, officials });
+  res.json({ settings: pub, formats, teams, matches, players: regs, standings: computeStandings(teams, matches), eventKeys: T.EVENT_KEYS, categories: T.CATEGORIES, categoryLabels: T.CATEGORY_LABELS, officials, presence: presence() });
 }));
 
 app.get('/api/stream', (req, res) => {
   res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
   res.flushHeaders();
   res.write('retry: 3000\n\n');
-  clients.add(res);
-  req.on('close', () => clients.delete(res));
+  const cid = cleanId(req.query.cid) || crypto.randomBytes(8).toString('hex');
+  const view = VIEW_NAMES.includes(req.query.view) ? req.query.view : 'home';
+  clients.set(res, { cid, view });
+  res.write(`event: presence\ndata: ${JSON.stringify(presence())}\n\n`);
+  broadcastPresence();
+  req.on('close', () => { clients.delete(res); broadcastPresence(); });
 });
+
+// The page tells us when the viewer switches tab, so "watching live" stays accurate.
+app.post('/api/presence', limiter(240, 60e3), (req, res) => {
+  const cid = cleanId(req.body && req.body.cid), view = req.body && req.body.view;
+  if (cid && VIEW_NAMES.includes(view)) {
+    for (const c of clients.values()) if (c.cid === cid) c.view = view;
+    broadcastPresence();
+  }
+  res.json({ ok: true });
+});
+
+// One page view per page load; a random browser id (no personal data) counts unique visitors.
+app.post('/api/hit', limiter(60, 60e3), ah(async (req, res) => {
+  const vid = cleanId(req.body && req.body.vid);
+  await q("INSERT INTO page_views (day, views) VALUES (CURRENT_DATE, 1) ON CONFLICT (day) DO UPDATE SET views = page_views.views + 1");
+  stats.views++;
+  if (vid) {
+    const r = await q('INSERT INTO visitors (id) VALUES ($1) ON CONFLICT (id) DO UPDATE SET last_seen = now() RETURNING (xmax = 0) AS inserted', [vid]);
+    if (r.rows[0] && r.rows[0].inserted) stats.visitors++;
+  }
+  broadcastPresence();
+  res.json(presence());
+}));
 
 app.get('/api/files/:id', ah(async (req, res) => {
   if (!/^[0-9a-f-]{36}$/.test(req.params.id)) return res.status(404).end();
@@ -292,7 +344,7 @@ app.post('/api/register', limiter(20, 60 * 60e3), upload.fields([{ name: 'photo'
 const admin = express.Router();
 admin.use(needRole('admin'));
 
-const TEXT_FIELDS = ['name', 'eyebrow', 'tagline', 'startDate', 'dateText', 'venue', 'regDeadline', 'fee', 'about', 'rules', 'schedule', 'prizes', 'contactName', 'contactPhone', 'upiId', 'payNote', 'qrId', 'gifId'];
+const TEXT_FIELDS = ['name', 'eyebrow', 'tagline', 'startDate', 'dateText', 'venue', 'regDeadline', 'fee', 'about', 'rules', 'schedule', 'prizes', 'contactName', 'contactPhone', 'footerEmail', 'upiId', 'payNote', 'qrId', 'gifId'];
 admin.put('/settings', ah(async (req, res) => {
   const s = await getSettings();
   const b = req.body || {};
@@ -342,10 +394,12 @@ admin.post('/reset', limiter(5, 15 * 60e3), ah(async (req, res) => {
   const counts = await tx(async (c) => {
     const n = (await c.query("SELECT (SELECT count(*) FROM registrations)::int AS regs, (SELECT count(*) FROM teams)::int AS teams, (SELECT count(*) FROM matches)::int AS matches")).rows[0];
     await c.query('TRUNCATE matches, registrations, teams RESTART IDENTITY CASCADE');
+    if (b.resetViews !== false) await c.query('TRUNCATE page_views, visitors');
     await c.query('DELETE FROM files WHERE NOT (id::text = ANY($1::text[]))', [keepFiles]);
     await c.query("INSERT INTO settings (key, value) VALUES ('tournament', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", [next]);
     return n;
   });
+  await loadStats(); broadcastPresence();
   console.log(`Tournament reset by ${req.user.username}: removed ${counts.regs} registrations, ${counts.teams} teams, ${counts.matches} matches.`);
   broadcast();
   res.json({ ok: true, removed: counts });
@@ -745,7 +799,9 @@ const htmlEsc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<'
 const sendIndex = ah(async (req, res) => {
   const s = await getSettings();
   res.set({ 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
-  res.send(INDEX_TEMPLATE.split('{{TOURNAMENT_NAME}}').join(htmlEsc(s.name || DEFAULT_SETTINGS.name)));
+  res.send(INDEX_TEMPLATE.split('{{TOURNAMENT_NAME}}').join(htmlEsc(s.name || DEFAULT_SETTINGS.name))
+    .split('{{YEAR}}').join(String(new Date().getFullYear()))
+    .split('{{FOOTER_EMAIL}}').join(htmlEsc(s.footerEmail || DEFAULT_SETTINGS.footerEmail)));
 });
 app.get(['/', '/index.html'], sendIndex);
 app.use(express.static(path.join(__dirname, 'public'), { index: false, maxAge: '1h' }));
@@ -759,5 +815,6 @@ app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
 });
 
 migrate()
+  .then(loadStats)
   .then(() => app.listen(PORT, () => console.log(`Badminton portal listening on :${PORT}`)))
   .catch((e) => { console.error('Database setup failed:', e); process.exit(1); });

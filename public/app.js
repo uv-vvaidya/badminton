@@ -95,6 +95,7 @@ async function refresh() {
   loading = (async () => {
     try {
       S.data = await api('/api/state');
+      if (!S.presence && S.data.presence) { S.presence = S.data.presence; setTimeout(renderPresence); }
       if (S.user && S.user.role === 'admin' && S.view === 'admin' && S.adminTab === 'regs') S.regs = await api('/api/admin/registrations');
       renderAll();
     } catch (e) { console.warn(e); }
@@ -102,10 +103,27 @@ async function refresh() {
   await loading; loading = null;
   if (again) { again = false; return refresh(); }
 }
+// Audience: a random id per open tab (cid) and per browser (vid). Neither holds personal data.
+const rid = () => (Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2)).replace(/[^a-z0-9]/g, '').slice(0, 20).padEnd(12, '0');
+const CID = rid();
+let VID = null;
+try { VID = localStorage.getItem('uvb-vid'); if (!VID) { VID = rid(); localStorage.setItem('uvb-vid', VID); } } catch (e) { VID = null; }
+const fmtNum = (n) => Number(n || 0).toLocaleString();
+function renderPresence() {
+  const p = S.presence; if (!p) return;
+  const w = $('#liveWatch');
+  if (w) { w.hidden = false; w.innerHTML = '<i class="live-dot on"></i> ' + fmtNum(p.live) + ' following live · ' + fmtNum(p.online) + ' on the site'; }
+  $('#footTxt').innerHTML = '<span class="aud"><i class="live-dot on"></i> ' + fmtNum(p.online) + (p.online === 1 ? ' person' : ' people') + ' on the site now</span><span class="aud">' + fmtNum(p.views) + ' page views</span><span class="aud">' + fmtNum(p.visitors) + ' visitors</span>';
+  if (S.view === 'home') renderHomeStats();
+}
+let streamOpen = false;
+function sendPresence() { if (streamOpen) api('/api/presence', { method: 'POST', body: { cid: CID, view: S.view } }).catch(() => {}); }
 function connectStream() {
   let es;
-  try { es = new EventSource('/api/stream'); } catch (e) { return; }
+  try { es = new EventSource('/api/stream?cid=' + CID + '&view=' + encodeURIComponent(S.view)); } catch (e) { return; }
   let t = null;
+  es.onopen = () => { streamOpen = true; sendPresence(); };
+  es.addEventListener('presence', (e) => { try { S.presence = JSON.parse(e.data); renderPresence(); } catch (er) { /* ignore */ } });
   es.addEventListener('state', () => { clearTimeout(t); t = setTimeout(refresh, 150); });
   es.onerror = () => { /* EventSource reconnects on its own */ };
 }
@@ -118,6 +136,7 @@ function route() {
   VIEWS.forEach((x) => { $('#view-' + x).hidden = x !== v; });
   $$('nav.tabs a').forEach((a) => { if (a.dataset.view === v) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
   if (v === 'admin' && S.user && S.user.role === 'admin') refresh();
+  sendPresence();
   renderView(); window.scrollTo(0, 0);
 }
 addEventListener('hashchange', route);
@@ -140,6 +159,7 @@ let cdTimer = null;
 function renderHome() {
   const c = D().settings; if (!c.name) return;
   document.title = c.name;
+  $('#footLegal').innerHTML = '&copy; ' + new Date().getFullYear() + ' ' + esc(c.name) + '. All rights reserved.' + (c.footerEmail ? ' For more details, contact <span class="copyable">' + esc(c.footerEmail) + '</span>' : '');
   $('#brandName').textContent = c.name; $('#hName').textContent = c.name; $('#hEyebrow').textContent = c.eyebrow || ''; $('#hTag').textContent = c.tagline || '';
   $('#hFacts').innerHTML = [['When', c.dateText || fmtDay(c.startDate)], ['Where', c.venue], ['Register by', c.regDeadline ? fmtDay(c.regDeadline) : (c.regOpen ? 'Open now' : 'Closed')]]
     .filter((x) => x[1]).map(([k, v]) => '<div><small>' + esc(k) + '</small>' + esc(v) + '</div>').join('');
@@ -152,9 +172,8 @@ function renderHome() {
     $('#hCountdown').innerHTML = [[d, 'days'], [h, 'hrs'], [m, 'min'], [s, 'sec']].map(([n, l]) => '<div><b class="tab-num">' + String(n).padStart(2, '0') + '</b><span>' + l + '</span></div>').join('');
   };
   tick(); cdTimer = setInterval(tick, 1000);
-  const ps = D().players, ms = D().matches.filter((m) => m.status !== 'bye');
-  $('#hStats').innerHTML = [[ps.length, 'Registrations'], [D().teams.length, 'Confirmed entries'], [ms.filter((m) => m.status === 'done').length + ' / ' + ms.length, 'Matches played']]
-    .map(([n, l]) => '<div><b class="tab-num">' + esc(n) + '</b><span>' + esc(l) + '</span></div>').join('');
+  const ps = D().players;
+  renderHomeStats();
   $('#hFee').textContent = c.fee || '';
   $('#hEvents').innerHTML = Object.entries(c.events || {}).filter(([, evs]) => evs.length).map(([cat, evs]) => '<div class="event-card"><h3>' + esc((D().categoryLabels || {})[cat] || cat) + '</h3><div class="chips">' +
     evs.map((e) => '<span class="chip">' + esc(e) + ' · ' + ps.filter((x) => x.category === cat && x.event === e).length + '</span>').join('') + '</div></div>').join('');
@@ -162,6 +181,11 @@ function renderHome() {
   const li = (t) => lines(t).map((l, i) => { const p = l.split(' · '); return '<li><span class="k">' + (p.length > 1 ? '' : String(i + 1).padStart(2, '0')) + '</span><span>' + (p.length > 1 ? '<b>' + esc(p[0]) + '</b> · ' + esc(p.slice(1).join(' · ')) : esc(l)) + '</span></li>'; }).join('');
   $('#hRules').innerHTML = li(c.rules); $('#hSchedule').innerHTML = li(c.schedule); $('#hPrizes').innerHTML = li(c.prizes);
   $('#hContact').innerHTML = '<b>Questions?</b><span>' + esc(c.contactName) + '</span>' + (c.contactPhone ? '<span class="copyable">' + esc(c.contactPhone) + '</span>' : '');
+}
+function renderHomeStats() {
+  const ps = D().players, ms = D().matches.filter((m) => m.status !== 'bye'), p = S.presence || D().presence || {};
+  $('#hStats').innerHTML = [[ps.length, 'Registrations'], [D().teams.length, 'Confirmed entries'], [ms.filter((m) => m.status === 'done').length + ' / ' + ms.length, 'Matches played'], [fmtNum(p.online), 'Watching now'], [fmtNum(p.views), 'Page views']]
+    .map(([n, l]) => '<div><b class="tab-num">' + esc(n) + '</b><span>' + esc(l) + '</span></div>').join('');
 }
 function shuttleSvg() { return '<svg viewBox="0 0 200 150" width="70%" aria-label="Shuttlecock" role="img"><g fill="none" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round" opacity=".9"><path d="M100 118 62 22l18 8 8-22 12 22 12-22 8 22 18-8z"/><path d="M76 58h48M84 82h32"/></g><circle cx="100" cy="126" r="14" fill="#E79A45"/><path d="M30 140h140" stroke="currentColor" stroke-width="2" opacity=".5"/></svg>'; }
 
@@ -551,7 +575,7 @@ function adminSettings(p) {
     '<div class="row">' + f('cStart', 'Start date and time', c.startDate, 'datetime-local', 'drives the countdown') + f('cDateText', 'Dates as shown', c.dateText, 'text', 'e.g. 14–16 Nov 2026') + '</div>' +
     '<div class="row">' + f('cVenue', 'Venue', c.venue) + f('cDeadline', 'Registration closes', c.regDeadline, 'date') + '</div>' + ta('cAbout', 'About the tournament', c.about) +
     ta('cRules', 'Format & rules', c.rules, 'one per line') + ta('cSchedule', 'Schedule', c.schedule, "one per line; use ' · ' between day and detail") + ta('cPrizes', 'Prizes', c.prizes, 'one per line') +
-    '<div class="row">' + f('cContact', 'Contact name', c.contactName) + f('cPhone', 'Contact phone', c.contactPhone, 'tel') + '</div>' +
+    '<div class="row">' + f('cContact', 'Contact name', c.contactName) + f('cPhone', 'Contact phone', c.contactPhone, 'tel') + '</div>' + f('cFootEmail', 'Footer contact email', c.footerEmail, 'email', 'shown after "All rights reserved"') +
     '<h3 style="margin-top:8px">Registration &amp; payment</h3><div class="row">' + f('cFee', 'Fee text', c.fee) + f('cUpi', 'UPI ID', c.upiId) + '</div>' + f('cPayNote', 'Payment instructions', c.payNote) +
     '<fieldset><legend>Events open for registration</legend><div class="seg">' + Object.entries(cats).flatMap(([cat, evs]) => evs.map((e) => { const on = ((c.events || {})[cat] || []).includes(e); return '<label><input type="checkbox" data-cat="' + cat + '" data-evt="' + e + '" ' + (on ? 'checked' : '') + '><span>' + esc(catLabel(cat)) + ' · ' + e + '</span></label>'; })).join('') + '</div></fieldset>' +
     '<label class="f" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="cOpen" ' + (c.regOpen ? 'checked' : '') + '> Registrations open</label>' +
@@ -563,7 +587,7 @@ function adminSettings(p) {
     e.preventDefault();
     const events = {}; Object.keys(cats).forEach((k) => { events[k] = []; });
     $$('[data-cat]', p).forEach((cb) => { if (cb.checked) events[cb.dataset.cat].push(cb.dataset.evt); });
-    act('/api/admin/settings', { name: v('#cName'), eyebrow: v('#cEyebrow'), tagline: v('#cTag'), startDate: v('#cStart'), dateText: v('#cDateText'), venue: v('#cVenue'), regDeadline: v('#cDeadline'), about: p.querySelector('#cAbout').value, rules: p.querySelector('#cRules').value, schedule: p.querySelector('#cSchedule').value, prizes: p.querySelector('#cPrizes').value, contactName: v('#cContact'), contactPhone: v('#cPhone'), fee: v('#cFee'), upiId: v('#cUpi'), payNote: v('#cPayNote'), events, regOpen: p.querySelector('#cOpen').checked }, 'PUT', 'Settings saved');
+    act('/api/admin/settings', { name: v('#cName'), eyebrow: v('#cEyebrow'), tagline: v('#cTag'), startDate: v('#cStart'), dateText: v('#cDateText'), venue: v('#cVenue'), regDeadline: v('#cDeadline'), about: p.querySelector('#cAbout').value, rules: p.querySelector('#cRules').value, schedule: p.querySelector('#cSchedule').value, prizes: p.querySelector('#cPrizes').value, contactName: v('#cContact'), contactPhone: v('#cPhone'), footerEmail: v('#cFootEmail'), fee: v('#cFee'), upiId: v('#cUpi'), payNote: v('#cPayNote'), events, regOpen: p.querySelector('#cOpen').checked }, 'PUT', 'Settings saved');
   };
   const up = (sel, key) => {
     p.querySelector(sel).onchange = async (e) => {
@@ -586,6 +610,7 @@ function adminData(p) {
     '<form class="card form" id="tpForm"><h3>Add test players</h3><p>Creates confirmed entries named "Test …" in one event so you can try groups, league, knockouts and scoring without real sign-ups. Remove them later with <b>Start a new tournament</b> below, or one by one in Event setup.</p>' +
     '<div class="row"><label class="f">Event<select id="tpEv">' + evs.map((k) => '<option>' + esc(k) + '</option>').join('') + '</select></label><label class="f">How many ' + 'entries <small>2–32</small><input type="number" id="tpN" min="2" max="32" value="8"></label></div>' +
     '<div class="toolbar"><button class="btn primary">Add test players</button></div></form>' +
+    '<div class="card"><h3>Audience</h3><div class="stats" style="margin-top:10px"><div><b class="tab-num">' + fmtNum((S.presence || {}).online) + '</b><span>On the site now</span></div><div><b class="tab-num">' + fmtNum((S.presence || {}).live) + '</b><span>Following live</span></div><div><b class="tab-num">' + fmtNum((S.presence || {}).views) + '</b><span>Page views</span></div><div><b class="tab-num">' + fmtNum((S.presence || {}).visitors) + '</b><span>Unique visitors</span></div></div><p style="font-size:13px;color:var(--muted);margin-top:8px">One view per page load. Visitors are counted by an anonymous browser id; no names or IP addresses are stored.</p></div>' +
     '<div class="card form danger-card"><h3>Start a new tournament</h3><p>Permanently deletes <b>all</b> current tournament data: ' + counts.regs + ' registrations (with photos and payment screenshots), ' + counts.teams + ' teams and ' + counts.matches + ' matches, including scores and points tables. Admin, scorer and umpire logins are kept.</p>' +
     '<p class="note warn">This cannot be undone. Download anything you need first, for example screenshots of the final standings.</p>' +
     '<div class="toolbar"><button class="btn danger" id="resetBtn">Delete everything and start new…</button></div></div></div>';
@@ -597,6 +622,7 @@ function adminData(p) {
   p.querySelector('#resetBtn').onclick = () => modal(
     '<h3>Start a new tournament</h3><label class="f">New tournament name<input type="text" id="rsName" value="' + esc(d.settings.name || '') + '"></label>' +
     '<fieldset><legend>Home page and registration settings</legend><div class="seg"><label><input type="radio" name="rsKeep" value="keep" checked><span>Keep (venue, rules, fee, GIF, events, formats)</span></label><label><input type="radio" name="rsKeep" value="reset"><span>Reset to defaults</span></label></div></fieldset>' +
+    '<label class="f" style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" id="rsViews" checked> Also reset page views and visitor count</label>' +
     '<label class="f">Type DELETE to confirm<input type="text" id="rsConfirm" autocomplete="off"></label>' +
     '<label class="f">Your password<input type="password" id="rsPass" autocomplete="current-password"></label>' +
     '<span class="msg err" id="rsErr"></span><div class="toolbar"><button class="btn danger" id="rsGo">Delete all data</button><button class="btn" data-close>Cancel</button></div>',
@@ -604,7 +630,7 @@ function adminData(p) {
       m.querySelector('#rsGo').onclick = async () => {
         const btn = m.querySelector('#rsGo'); btn.disabled = true;
         try {
-          const r = await api('/api/admin/reset', { method: 'POST', body: { newName: m.querySelector('#rsName').value, keepSettings: m.querySelector('input[name=rsKeep]:checked').value === 'keep', confirm: m.querySelector('#rsConfirm').value.trim(), password: m.querySelector('#rsPass').value } });
+          const r = await api('/api/admin/reset', { method: 'POST', body: { newName: m.querySelector('#rsName').value, keepSettings: m.querySelector('input[name=rsKeep]:checked').value === 'keep', resetViews: m.querySelector('#rsViews').checked, confirm: m.querySelector('#rsConfirm').value.trim(), password: m.querySelector('#rsPass').value } });
           closeModal(); S.regs = []; S.selected.clear(); S.scoreId = null; S.fxEvent = null; S.adminEv = null;
           toast('New tournament started. Removed ' + r.removed.regs + ' registrations, ' + r.removed.teams + ' teams and ' + r.removed.matches + ' matches.');
           await refresh();
@@ -749,5 +775,6 @@ route();
   await refresh();
   if (S.setup && S.setup.needsSetup && !S.user) location.hash = '#admin';
   connectStream();
+  api('/api/hit', { method: 'POST', body: { vid: VID } }).then((p) => { S.presence = { ...(S.presence || {}), views: p.views, visitors: p.visitors }; renderPresence(); }).catch(() => {});
 })();
 })();

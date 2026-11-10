@@ -140,7 +140,7 @@
 <!-- LIVE -->
 <section class="view wrap" id="view-live" hidden>
   <main style="display:grid;gap:26px">
-    <div class="section-head"><h2>Live courts</h2><span class="chip" id="liveCount"></span></div>
+    <div class="section-head"><h2>Live courts</h2><div class="chips"><span class="chip live-watch" id="liveWatch" hidden></span><span class="chip" id="liveCount"></span></div></div>
     <div class="live-grid" id="liveNow"></div>
     <div class="grid-2">
       <div style="display:grid;gap:12px;align-content:start"><h3>Up next</h3><div class="matches" id="liveNext"></div></div>
@@ -165,7 +165,12 @@
   </main>
 </section>
 
-<footer><div class="wrap" id="footTxt">Scores update live for everyone with this page open.</div></footer>
+<footer>
+  <div class="wrap foot">
+    <div id="footTxt">Scores update live for everyone with this page open.</div>
+    <div class="foot-legal" id="footLegal">&copy; {{YEAR}} {{TOURNAMENT_NAME}}. All rights reserved. For more details, contact <span class="copyable" id="footEmail">{{FOOTER_EMAIL}}</span></div>
+  </div>
+</footer>
 <div id="modalRoot"></div>
 
 <script src="/app.js" defer></script>
