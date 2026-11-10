@@ -249,3 +249,6 @@ img{max-width:100%}
 /* checkbox toggles show their state with a mark, not just colour */
 .seg input[type=checkbox]+span::before{content:"";display:inline-block;width:14px;height:14px;margin-right:8px;vertical-align:-2px;border:1.5px solid currentColor;border-radius:3px}
 .seg input[type=checkbox]:checked+span::before{content:"✓";line-height:12px;text-align:center;font-size:12px;font-weight:800}
+
+.danger-card{border-color:var(--bad)}
+.danger-card h3{color:var(--bad)}

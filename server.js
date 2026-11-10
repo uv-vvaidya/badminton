@@ -327,6 +327,49 @@ admin.put('/formats/:ek', ah(async (req, res) => {
   res.json({ ok: true, format: f });
 }));
 
+// ---------- admin: new tournament (wipe data) and test players ----------
+// Deletes every registration, team, match and player upload. Logins are kept.
+admin.post('/reset', limiter(5, 15 * 60e3), ah(async (req, res) => {
+  const b = req.body || {};
+  if (b.confirm !== 'DELETE') throw bad('Type DELETE to confirm.');
+  const me = (await q('SELECT password_hash FROM users WHERE id=$1', [req.user.id])).rows[0];
+  if (!me || !(await bcrypt.compare(String(b.password || ''), me.password_hash))) throw new HttpError(403, 'Your password is not correct.');
+  const old = await getSettings();
+  const keepSettings = !!b.keepSettings;
+  const next = keepSettings ? { ...old } : { ...DEFAULT_SETTINGS, events: T.normalizeEvents(DEFAULT_SETTINGS.events) };
+  if (b.newName) next.name = str(b.newName, 80);
+  const keepFiles = keepSettings ? [old.gifId, old.qrId].filter(Boolean) : [];
+  const counts = await tx(async (c) => {
+    const n = (await c.query("SELECT (SELECT count(*) FROM registrations)::int AS regs, (SELECT count(*) FROM teams)::int AS teams, (SELECT count(*) FROM matches)::int AS matches")).rows[0];
+    await c.query('TRUNCATE matches, registrations, teams RESTART IDENTITY CASCADE');
+    await c.query('DELETE FROM files WHERE NOT (id::text = ANY($1::text[]))', [keepFiles]);
+    await c.query("INSERT INTO settings (key, value) VALUES ('tournament', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", [next]);
+    return n;
+  });
+  console.log(`Tournament reset by ${req.user.username}: removed ${counts.regs} registrations, ${counts.teams} teams, ${counts.matches} matches.`);
+  broadcast();
+  res.json({ ok: true, removed: counts });
+}));
+
+// Adds confirmed test entries to an event so groups, league and knockouts can be tried without real sign-ups.
+const TEST_FIRST = ['Arjun', 'Priya', 'Rahul', 'Sneha', 'Karthik', 'Divya', 'Vikram', 'Ananya', 'Rohan', 'Meera', 'Aditya', 'Kavya', 'Nikhil', 'Ishita', 'Suresh', 'Pooja', 'Manoj', 'Lakshmi', 'Ravi', 'Neha'];
+admin.post('/test-players', ah(async (req, res) => {
+  const ek = req.body.eventKey;
+  if (!T.EVENT_KEYS.includes(ek)) throw bad('Unknown event.');
+  const count = Math.max(2, Math.min(32, parseInt(req.body.count, 10) || 8));
+  const existing = (await q('SELECT count(*)::int AS n FROM teams WHERE event_key=$1', [ek])).rows[0].n;
+  const pair = /Doubles/.test(ek);
+  await tx(async (c) => {
+    for (let i = 0; i < count; i++) {
+      const k = existing + i;
+      const nm = (j) => `Test ${TEST_FIRST[(k * 2 + j) % TEST_FIRST.length]} ${k + 1}${pair ? String.fromCharCode(65 + j) : ''}`;
+      await c.query('INSERT INTO teams (event_key, names) VALUES ($1,$2)', [ek, JSON.stringify(pair ? [nm(0), nm(1)] : [nm(0)])]);
+    }
+  });
+  broadcast();
+  res.json({ ok: true, added: count });
+}));
+
 admin.post('/files', uploadOne.single('file'), ah(async (req, res) => {
   if (!req.file) throw bad('Choose a file.');
   res.json({ id: await saveFile(req.file, false) });

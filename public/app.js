@@ -360,7 +360,7 @@ function renderAdmin() {
       ' Open the Score tab, pick a match, choose who serves first, then tap a side for every rally. Games and matches end on their own, and the points table updates when a match finishes.</p><a class="btn primary" href="#score" style="justify-self:start">Open the Score tab</a></div>' + passwordCard();
     bindPassword(); return;
   }
-  const tabs = [['regs', 'Registrations'], ['event', 'Event setup'], ['matches', 'Matches'], ['settings', 'Settings'], ['users', 'Users']];
+  const tabs = [['regs', 'Registrations'], ['event', 'Event setup'], ['matches', 'Matches'], ['settings', 'Settings'], ['users', 'Users'], ['data', 'Testing & reset']];
   body.innerHTML = '<div class="admin-tabs">' + tabs.map(([k, l]) => '<button aria-pressed="' + (S.adminTab === k) + '" data-tab="' + k + '">' + l + '</button>').join('') + '</div><div id="adminPane" style="margin-top:16px"></div>';
   body.querySelector('.admin-tabs').onclick = async (e) => {
     const b = e.target.closest('button'); if (!b) return; S.adminTab = b.dataset.tab;
@@ -368,7 +368,7 @@ function renderAdmin() {
     if (S.adminTab === 'users') S.users = await api('/api/admin/users').catch(() => []);
     renderAdmin();
   };
-  ({ regs: adminRegs, event: adminEvent, matches: adminMatches, settings: adminSettings, users: adminUsers })[S.adminTab]($('#adminPane'));
+  ({ regs: adminRegs, event: adminEvent, matches: adminMatches, settings: adminSettings, users: adminUsers, data: adminData })[S.adminTab]($('#adminPane'));
 }
 
 function renderSetup(body) {
@@ -575,6 +575,42 @@ function adminSettings(p) {
   };
   up('#upGif', 'gifId'); up('#upQr', 'qrId');
   const rm = p.querySelector('#rmGif'); if (rm) rm.onclick = () => act('/api/admin/settings', { gifId: '' }, 'PUT', 'GIF removed');
+}
+
+// Testing & reset
+function adminData(p) {
+  const d = D();
+  const evs = d.eventKeys;
+  const counts = { regs: d.players.length, teams: d.teams.length, matches: d.matches.length };
+  p.innerHTML = '<div style="display:grid;gap:16px;max-width:760px">' +
+    '<form class="card form" id="tpForm"><h3>Add test players</h3><p>Creates confirmed entries named "Test …" in one event so you can try groups, league, knockouts and scoring without real sign-ups. Remove them later with <b>Start a new tournament</b> below, or one by one in Event setup.</p>' +
+    '<div class="row"><label class="f">Event<select id="tpEv">' + evs.map((k) => '<option>' + esc(k) + '</option>').join('') + '</select></label><label class="f">How many ' + 'entries <small>2–32</small><input type="number" id="tpN" min="2" max="32" value="8"></label></div>' +
+    '<div class="toolbar"><button class="btn primary">Add test players</button></div></form>' +
+    '<div class="card form danger-card"><h3>Start a new tournament</h3><p>Permanently deletes <b>all</b> current tournament data: ' + counts.regs + ' registrations (with photos and payment screenshots), ' + counts.teams + ' teams and ' + counts.matches + ' matches, including scores and points tables. Admin, scorer and umpire logins are kept.</p>' +
+    '<p class="note warn">This cannot be undone. Download anything you need first, for example screenshots of the final standings.</p>' +
+    '<div class="toolbar"><button class="btn danger" id="resetBtn">Delete everything and start new…</button></div></div></div>';
+  p.querySelector('#tpForm').onsubmit = (e) => {
+    e.preventDefault();
+    const ek = p.querySelector('#tpEv').value, n = +p.querySelector('#tpN').value || 8;
+    act('/api/admin/test-players', { eventKey: ek, count: n }, 'POST', 'Added ' + n + ' test ' + unit(ek, n) + ' to ' + ek + '. Draw groups in Event setup.');
+  };
+  p.querySelector('#resetBtn').onclick = () => modal(
+    '<h3>Start a new tournament</h3><label class="f">New tournament name<input type="text" id="rsName" value="' + esc(d.settings.name || '') + '"></label>' +
+    '<fieldset><legend>Home page and registration settings</legend><div class="seg"><label><input type="radio" name="rsKeep" value="keep" checked><span>Keep (venue, rules, fee, GIF, events, formats)</span></label><label><input type="radio" name="rsKeep" value="reset"><span>Reset to defaults</span></label></div></fieldset>' +
+    '<label class="f">Type DELETE to confirm<input type="text" id="rsConfirm" autocomplete="off"></label>' +
+    '<label class="f">Your password<input type="password" id="rsPass" autocomplete="current-password"></label>' +
+    '<span class="msg err" id="rsErr"></span><div class="toolbar"><button class="btn danger" id="rsGo">Delete all data</button><button class="btn" data-close>Cancel</button></div>',
+    (m) => {
+      m.querySelector('#rsGo').onclick = async () => {
+        const btn = m.querySelector('#rsGo'); btn.disabled = true;
+        try {
+          const r = await api('/api/admin/reset', { method: 'POST', body: { newName: m.querySelector('#rsName').value, keepSettings: m.querySelector('input[name=rsKeep]:checked').value === 'keep', confirm: m.querySelector('#rsConfirm').value.trim(), password: m.querySelector('#rsPass').value } });
+          closeModal(); S.regs = []; S.selected.clear(); S.scoreId = null; S.fxEvent = null; S.adminEv = null;
+          toast('New tournament started. Removed ' + r.removed.regs + ' registrations, ' + r.removed.teams + ' teams and ' + r.removed.matches + ' matches.');
+          await refresh();
+        } catch (er) { m.querySelector('#rsErr').textContent = er.message; btn.disabled = false; }
+      };
+    });
 }
 
 // Users
