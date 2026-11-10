@@ -1,0 +1,18 @@
+{
+  "name": "uv-badminton-portal",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Badminton tournament portal: registration, groups, league, knockouts and live scoring.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test/logic.test.js"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "bcryptjs": "2.4.3",
+    "express": "4.21.2",
+    "multer": "2.0.2",
+    "pg": "8.13.1"
+  }
+}

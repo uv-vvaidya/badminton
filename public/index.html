@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>{{TOURNAMENT_NAME}}</title>
+<meta name="description" content="Tournament registration, fixtures and live scores.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;800;900&family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <div class="brand"><svg width="28" height="28" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 30a4 4 0 0 0 4-4h-8a4 4 0 0 0 4 4z" fill="#E79A45"/><path d="M12 26 6 6l5 2 2-6 3 6 3-6 2 6 5-2-6 20z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg><span id="brandName">{{TOURNAMENT_NAME}}</span></div>
+    <nav class="tabs" aria-label="Sections">
+      <a href="#home" data-view="home">Home</a>
+      <a href="#register" data-view="register">Register</a>
+      <a href="#fixtures" data-view="fixtures">Fixtures</a>
+      <a href="#live" data-view="live"><i class="live-dot" id="navLiveDot"></i>Live</a>
+      <a href="#score" data-view="score" id="navScore" hidden>Score</a>
+      <a href="#admin" data-view="admin" id="navAdmin">Login</a>
+    </nav>
+  </div>
+</header>
+
+<!-- HOME -->
+<section class="view" id="view-home">
+  <div class="hero">
+    <div class="wrap">
+      <div class="hero-text">
+        <div class="eyebrow" id="hEyebrow">Annual company tournament</div>
+        <h1 id="hName">{{TOURNAMENT_NAME}}</h1>
+        <p class="tag" id="hTag"></p>
+        <div class="facts" id="hFacts"></div>
+        <div class="countdown" id="hCountdown"></div>
+        <div class="cta-row">
+          <a class="btn primary" href="#register">Register to play</a>
+          <a class="btn ghost" href="#fixtures" style="color:var(--court-ink)">See fixtures</a>
+        </div>
+      </div>
+      <div class="hero-media" id="hMedia"></div>
+    </div>
+  </div>
+  <div class="wrap">
+    <div class="section">
+      <div class="stats" id="hStats"></div>
+    </div>
+    <div class="section">
+      <div class="section-head"><h2>Events</h2><span class="chip cork" id="hFee"></span></div>
+      <div class="events" id="hEvents"></div>
+    </div>
+    <div class="section grid-2">
+      <div style="display:grid;gap:14px">
+        <div class="section-head"><h2>About</h2></div>
+        <p class="prose" id="hAbout"></p>
+        <div class="section-head" style="margin-top:18px"><h2>Format &amp; rules</h2></div>
+        <ul class="list-lines" id="hRules"></ul>
+      </div>
+      <div style="display:grid;gap:14px;align-content:start">
+        <div class="section-head"><h2>Schedule</h2></div>
+        <ul class="list-lines" id="hSchedule"></ul>
+        <div class="section-head" style="margin-top:18px"><h2>Prizes</h2></div>
+        <ul class="list-lines" id="hPrizes"></ul>
+        <div class="contact" id="hContact"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- REGISTER -->
+<section class="view wrap" id="view-register" hidden>
+  <main>
+    <div class="section-head" style="margin-bottom:18px"><h2>Player registration</h2><span class="chip" id="regDeadlineChip"></span></div>
+    <div id="regGate"></div>
+    <form class="card form" id="regForm" novalidate>
+      <fieldset>
+        <legend>Category</legend>
+        <div class="seg" id="segCat">
+          <label><input type="radio" name="cat" id="cat-men" value="Men" required><span>Men</span></label>
+          <label><input type="radio" name="cat" id="cat-women" value="Women"><span>Women</span></label>
+          <label><input type="radio" name="cat" id="cat-kids" value="Kids"><span>Kids</span></label>
+        </div>
+      </fieldset>
+      <fieldset>
+        <legend>Event</legend>
+        <div class="seg" id="segEvt">
+          <label><input type="radio" name="evt" id="evt-singles" value="Singles" required><span>Singles</span></label>
+          <label><input type="radio" name="evt" id="evt-doubles" value="Doubles"><span>Doubles</span></label>
+          <label><input type="radio" name="evt" id="evt-mixed" value="Mixed Doubles"><span>Mixed doubles</span></label>
+        </div>
+        <small style="color:var(--muted)" id="evtHint">Playing more than one event? Submit one registration per event.</small>
+      </fieldset>
+      <div class="row">
+        <label class="f">First name<input type="text" id="fFirst" autocomplete="given-name" required></label>
+        <label class="f">Last name<input type="text" id="fLast" autocomplete="family-name" required></label>
+      </div>
+      <label class="f">Mobile number<input type="tel" id="fMobile" autocomplete="tel" inputmode="tel" placeholder="98765 43210" required></label>
+      <div id="partnerBlock" hidden>
+        <fieldset>
+          <legend>Do you have a partner?</legend>
+          <div class="seg">
+            <label><input type="radio" name="haspartner" id="hp-yes" value="yes"><span>Yes, I have a partner</span></label>
+            <label><input type="radio" name="haspartner" id="hp-no" value="no"><span>No, committee will assign</span></label>
+          </div>
+        </fieldset>
+        <div class="row" id="partnerFields" hidden style="margin-top:12px">
+          <label class="f">Partner's full name<input type="text" id="fPName"></label>
+          <label class="f">Partner's mobile number<input type="tel" id="fPMobile" inputmode="tel"></label>
+        </div>
+        <p class="note" id="assignNote" hidden style="margin-top:12px">The committee will pair you with another player in the same event and show your team on the Fixtures tab.</p>
+      </div>
+      <label class="f">About you <small>Playing level, years playing, favourite shot. Shown on your player card.</small><textarea id="fAbout" maxlength="400"></textarea></label>
+      <div class="row">
+        <div class="f" style="display:grid;gap:6px"><b style="font-size:14px">Your photo</b>
+          <label class="drop" for="fPhoto"><img id="fPhotoPrev" alt="" hidden><span id="fPhotoTxt">Choose a clear face photo (JPG or PNG)</span><input type="file" id="fPhoto" accept="image/*"></label></div>
+        <div class="f" style="display:grid;gap:6px"><b style="font-size:14px">Payment screenshot</b>
+          <label class="drop" for="fPay"><img id="fPayPrev" alt="" hidden><span id="fPayTxt">Upload the UPI / bank transfer screenshot</span><input type="file" id="fPay" accept="image/*"></label></div>
+      </div>
+      <div class="note" id="payInfo"></div>
+      <div class="toolbar"><button class="btn primary" type="submit" id="regSubmit">Submit registration</button><span class="msg" id="regMsg" role="status"></span></div>
+    </form>
+    <div class="section" id="myRegs"></div>
+  </main>
+</section>
+
+<!-- FIXTURES -->
+<section class="view wrap" id="view-fixtures" hidden>
+  <main style="display:grid;gap:22px">
+    <div class="section-head"><h2>Fixtures</h2><div class="pillbar" id="fxMode"></div></div>
+    <div class="pillbar" id="fxEvents"></div>
+    <div id="fxBody"></div>
+  </main>
+</section>
+
+<!-- LIVE -->
+<section class="view wrap" id="view-live" hidden>
+  <main style="display:grid;gap:26px">
+    <div class="section-head"><h2>Live courts</h2><span class="chip" id="liveCount"></span></div>
+    <div class="live-grid" id="liveNow"></div>
+    <div class="grid-2">
+      <div style="display:grid;gap:12px;align-content:start"><h3>Up next</h3><div class="matches" id="liveNext"></div></div>
+      <div style="display:grid;gap:12px;align-content:start"><h3>Latest results</h3><div class="matches" id="liveDone"></div></div>
+    </div>
+  </main>
+</section>
+
+<!-- SCORE -->
+<section class="view wrap" id="view-score" hidden>
+  <main style="display:grid;gap:8px">
+    <div class="section-head" style="margin-bottom:8px"><h2>Score a match</h2></div>
+    <div id="scoreBody"></div>
+  </main>
+</section>
+
+<!-- ADMIN -->
+<section class="view wrap" id="view-admin" hidden>
+  <main style="display:grid;gap:18px">
+    <div class="section-head"><h2>Admin</h2><span id="adminState"></span></div>
+    <div id="adminBody"></div>
+  </main>
+</section>
+
+<footer><div class="wrap" id="footTxt">Scores update live for everyone with this page open.</div></footer>
+<div id="modalRoot"></div>
+
+<script src="/app.js" defer></script>
+</body>
+</html>
