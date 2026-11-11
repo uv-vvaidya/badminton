@@ -73,6 +73,10 @@ const D = () => S.data || { settings: {}, formats: {}, teams: [], matches: [], p
 const teamMap = () => { const m = {}; D().teams.forEach((t) => { m[t.id] = t; }); return m; };
 const teamName = (id, tm = teamMap()) => (id && tm[id] ? (tm[id].names || []).join(' / ') : 'TBD');
 const fmtOf = (ek) => D().formats[ek] || { groups: 2, league: { points: 21, bestOf: 1, cap: 30 }, knockout: { qualifiers: 2, points: 21, bestOf: 3, cap: 30 } };
+const qualSet = (ek) => new Set(((D().qualifiers || {})[ek] || []).map((q) => q.team));
+function koRule(k) {
+  return !k.startRound || k.startRound === 'auto' ? 'Top <b>' + k.qualifiers + '</b> per group go through' : 'Knockout starts at <b>' + esc(((D().startLabels || {})[k.startRound] || '').replace(/ \(.*\)/, '')) + '</b>: best <b>' + ({ QF: 8, SF: 4, F: 2 }[k.startRound]) + '</b> from the groups';
+}
 const stageLabel = (s) => (s.bestOf === 1 ? '1 game' : 'Best of ' + s.bestOf) + ' to ' + s.points + ' (cap ' + s.cap + ')';
 function gameOver(g, p, cap) { const hi = Math.max(g[0], g[1]); return (hi >= p && Math.abs(g[0] - g[1]) >= 2) || hi >= cap; }
 function tally(m) { let a = 0, b = 0; (m.games || []).forEach((g) => { if (gameOver(g, m.points, m.cap)) { if (g[0] > g[1]) a++; else b++; } }); return [a, b]; }
@@ -267,20 +271,21 @@ function renderFixtures() {
   const b = $('#fxBody');
   if (!evs.length) { b.innerHTML = '<div class="empty">No entries yet. Fixtures appear here once players register and the committee draws the groups.</div>'; return; }
   const ev = S.fxEvent, f = fmtOf(ev);
-  const fmtLine = '<div class="kv" style="margin-bottom:16px"><span>League <b>' + esc(stageLabel(f.league)) + '</b></span><span>Knockout <b>' + esc(stageLabel(f.knockout)) + '</b></span><span>Top <b>' + f.knockout.qualifiers + '</b> per group go through</span></div>';
+  const fmtLine = '<div class="kv" style="margin-bottom:16px"><span>League <b>' + esc(stageLabel(f.league)) + '</b></span><span>Knockout <b>' + esc(stageLabel(f.knockout)) + '</b></span><span>' + koRule(f.knockout) + '</span></div>';
   if (S.fxMode === 'players') { b.innerHTML = playersHtml(ev); return; }
   if (S.fxMode === 'knockout') { b.innerHTML = fmtLine + bracketHtml(ev); return; }
   const tm = teamMap();
   const st = D().standings[ev] || {};
   const groups = Object.keys(st).sort();
+  const qs = qualSet(ev);
   let h = fmtLine;
   const confirmed = D().teams.filter((t) => t.event_key === ev).length;
   if (!groups.length) h += '<div class="empty">Groups for ' + esc(ev) + ' have not been drawn yet. ' + confirmed + ' ' + unit(ev, confirmed) + ' confirmed so far.</div>';
   if (groups.length) h += '<div class="section-head" style="margin-bottom:12px"><h2>Points table</h2><span class="chip">Updates as each match finishes</span></div>';
   if (groups.length) h += '<div class="groups">' + groups.map((g) => '<div class="card group-card"><h3>Group ' + esc(g) + '<span class="chip">' + st[g].length + ' ' + unit(ev, st[g].length) + '</span></h3><div class="table-wrap"><table class="std"><thead><tr><th>' + (isPair(ev) ? 'Team' : 'Player') +
     '</th><th>P</th><th>W</th><th>L</th><th>Games</th><th>+/−</th><th>Pts</th></tr></thead><tbody>' +
-    st[g].map((r, i) => '<tr class="' + (i < f.knockout.qualifiers ? 'q' : '') + '"><td>' + esc(teamName(r.team, tm)) + '</td><td>' + r.p + '</td><td>' + r.w + '</td><td>' + r.l + '</td><td>' + r.gw + '–' + r.gl + '</td><td>' + (r.pf - r.pa > 0 ? '+' : '') + (r.pf - r.pa) + '</td><td><b>' + r.pts + '</b></td></tr>').join('') +
-    '</tbody></table></div><p style="font-size:12px;color:var(--muted);margin-top:8px">Green marker: knockout places. 2 points per win, then wins, game difference, point difference.</p></div>').join('') + '</div>';
+    st[g].map((r) => '<tr class="' + (qs.has(r.team) ? 'q' : '') + '"><td>' + esc(teamName(r.team, tm)) + '</td><td>' + r.p + '</td><td>' + r.w + '</td><td>' + r.l + '</td><td>' + r.gw + '–' + r.gl + '</td><td>' + (r.pf - r.pa > 0 ? '+' : '') + (r.pf - r.pa) + '</td><td><b>' + r.pts + '</b></td></tr>').join('') +
+    '</tbody></table></div><p style="font-size:12px;color:var(--muted);margin-top:8px">Green marker: currently in the knockout places. 2 points per win, then wins, game difference, point difference.</p></div>').join('') + '</div>';
   const lg = D().matches.filter((m) => m.event_key === ev && m.stage === 'league');
   if (lg.length) h += '<div class="section" style="margin-top:28px"><div class="section-head"><h2>League matches</h2><span class="chip">' + lg.filter((m) => m.status === 'done').length + ' of ' + lg.length + ' played</span></div><div class="matches">' + lg.map((m) => matchHtml(m, tm)).join('') + '</div></div>';
   b.innerHTML = h;
@@ -464,7 +469,8 @@ function adminRegs(p) {
 function stageInputs(prefix, s, isKo) {
   const pts = [11, 15, 21];
   return '<div class="fmt-grid">' +
-    (isKo ? '<label class="f">Qualify from each group<select id="' + prefix + 'Q">' + [1, 2, 3, 4].map((n) => '<option value="' + n + '" ' + (s.qualifiers === n ? 'selected' : '') + '>Top ' + n + '</option>').join('') + '</select></label>' : '') +
+    (isKo ? '<label class="f">Knockout starts at<select id="' + prefix + 'S">' + [['auto', 'Top of each group (auto size)'], ['QF', 'Quarterfinals: best 8'], ['SF', 'Semifinals: best 4'], ['F', 'Final: best 2']].map(([v, l]) => '<option value="' + v + '" ' + ((s.startRound || 'auto') === v ? 'selected' : '') + '>' + l + '</option>').join('') + '</select></label>' +
+      '<label class="f" id="' + prefix + 'QWrap"' + (s.startRound && s.startRound !== 'auto' ? ' hidden' : '') + '>Qualify from each group<select id="' + prefix + 'Q">' + [1, 2, 3, 4].map((n) => '<option value="' + n + '" ' + (s.qualifiers === n ? 'selected' : '') + '>Top ' + n + '</option>').join('') + '</select></label>' : '') +
     '<label class="f">Points per game<select id="' + prefix + 'P">' + pts.map((n) => '<option ' + (s.points === n ? 'selected' : '') + '>' + n + '</option>').join('') + (pts.includes(s.points) ? '' : '<option selected>' + s.points + '</option>') + '</select></label>' +
     '<label class="f">Games<select id="' + prefix + 'B">' + [1, 3, 5].map((n) => '<option value="' + n + '" ' + (s.bestOf === n ? 'selected' : '') + '>' + (n === 1 ? '1 game' : 'Best of ' + n) + '</option>').join('') + '</select></label>' +
     '<label class="f">Score cap <small>max points</small><input type="number" id="' + prefix + 'C" min="5" max="99" value="' + s.cap + '"></label></div>';
@@ -478,7 +484,7 @@ function adminEvent(p) {
   const ko = D().matches.filter((m) => m.event_key === ev && m.stage === 'knockout');
   const st = D().standings[ev] || {};
   const groups = Object.keys(st).sort();
-  const quals = groups.flatMap((g) => st[g].slice(0, f.knockout.qualifiers).map((r, i) => g + (i + 1) + ' ' + teamName(r.team, tm)));
+  const quals = ((D().qualifiers || {})[ev] || []).map((q) => q.group + q.rank + ' ' + teamName(q.team, tm));
   const usedGroups = Math.max(f.groups, ...teams.map((t) => LETTERS.indexOf(t.grp) + 1));
   p.innerHTML = '<div class="toolbar" style="margin-bottom:16px"><label class="f" style="display:flex;gap:8px;align-items:center">Event<select id="aEv">' + evs.map((k) => '<option ' + (k === ev ? 'selected' : '') + '>' + esc(k) + '</option>').join('') + '</select></label><span class="chip">' + teams.length + ' confirmed ' + unit(ev, teams.length) + '</span></div>' +
     '<div style="display:grid;gap:16px">' +
@@ -496,9 +502,9 @@ function adminEvent(p) {
     '<div class="card stage-card"><div class="section-head"><h3>3 · League matches</h3><span class="chip">' + league.filter((m) => m.status === 'done').length + ' of ' + league.length + ' played</span></div>' +
     '<p>Creates a round robin inside each group: everyone plays everyone once, using the league format above.</p><div class="toolbar"><button class="btn primary small" id="leagueBtn" ' + (groups.length ? '' : 'disabled') + '>' + (league.length ? 'Recreate league matches' : 'Create league matches') + '</button>' + (league.length ? '<a class="btn small" href="#fixtures">View standings</a>' : '') + '</div></div>' +
     // 4. Knockout
-    '<div class="card stage-card"><div class="section-head"><h3>4 · Knockout</h3><span class="chip">Top ' + f.knockout.qualifiers + ' per group</span></div>' +
+    '<div class="card stage-card"><div class="section-head"><h3>4 · Knockout</h3><span class="chip">' + (f.knockout.startRound && f.knockout.startRound !== 'auto' ? 'Starts at ' + esc(((D().startLabels || {})[f.knockout.startRound] || '').replace(/ \(.*\)/, '')) : 'Top ' + f.knockout.qualifiers + ' per group') + '</span></div>' +
     (quals.length ? '<p>Current qualifiers (' + quals.length + '): ' + esc(quals.join(' · ')) + '</p>' : '<p>Qualifiers appear once groups have standings.</p>') +
-    '<p style="font-size:13px;color:var(--muted)">Group winners are seeded first and teams from the same group are kept apart in the first round where possible. If the qualifier count is not a power of two, top seeds get a bye.</p>' +
+    '<p style="font-size:13px;color:var(--muted)">Quarterfinals, Semifinals or Final take the best 8, 4 or 2 across all groups: group winners first, then runners-up, then third places, ranked by points, wins, game difference and point difference. Group winners are seeded first and teams from the same group are kept apart in the first round where possible. With too few qualifiers, top seeds get a bye. Save the format first, then generate the draw.</p>' +
     '<div class="toolbar"><button class="btn primary small" id="koBtn" ' + (quals.length >= 2 ? '' : 'disabled') + '>' + (ko.length ? 'Regenerate knockout draw' : 'Generate knockout draw') + '</button>' + (ko.length ? '<button class="btn small danger" id="koClear">Clear knockout</button><button class="btn small" id="koView">View bracket</button>' : '') + '</div></div>' +
     '</div>';
   const enc = encodeURIComponent(ev);
@@ -506,10 +512,11 @@ function adminEvent(p) {
   const readFmt = () => ({
     groups: +p.querySelector('#gN').value || f.groups,
     league: { points: +p.querySelector('#fLP').value, bestOf: +p.querySelector('#fLB').value, cap: +p.querySelector('#fLC').value },
-    knockout: { qualifiers: +p.querySelector('#fKQ').value, points: +p.querySelector('#fKP').value, bestOf: +p.querySelector('#fKB').value, cap: +p.querySelector('#fKC').value },
+    knockout: { startRound: p.querySelector('#fKS').value, qualifiers: +p.querySelector('#fKQ').value, points: +p.querySelector('#fKP').value, bestOf: +p.querySelector('#fKB').value, cap: +p.querySelector('#fKC').value },
   });
   // Keep the cap sensible when the points change.
   [['#fLP', '#fLC'], ['#fKP', '#fKC']].forEach(([a, c]) => { p.querySelector(a).onchange = (e) => { const n = +e.target.value; p.querySelector(c).value = Math.max(n, Math.round(n * 10 / 7)); }; });
+  p.querySelector('#fKS').onchange = (e) => { p.querySelector('#fKQWrap').hidden = e.target.value !== 'auto'; };
   p.querySelector('#fmtForm').onsubmit = (e) => { e.preventDefault(); act('/api/admin/formats/' + enc, { format: readFmt() }, 'PUT', 'Format saved for ' + ev); };
   p.querySelector('#fmtAll').onclick = () => confirmBox('Use this format for every event?', 'Save for all events', () => act('/api/admin/formats/' + enc, { format: readFmt(), applyToAll: true }, 'PUT', 'Format saved for all events'));
   p.querySelector('#drawBtn').onclick = () => confirmBox('Shuffle ' + teams.length + ' ' + unit(ev, teams.length) + ' into ' + p.querySelector('#gN').value + ' group(s)? This clears existing league matches for ' + ev + '.', 'Draw groups', () => act('/api/admin/events/' + enc + '/draw', { groups: +p.querySelector('#gN').value }, 'POST', 'Groups drawn. Now create the league matches.'));
@@ -519,7 +526,7 @@ function adminEvent(p) {
     '<label class="f">Group<select id="mtG"><option value="">No group</option>' + LETTERS.slice(0, Math.max(usedGroups, 2)).map((g) => '<option>' + g + '</option>').join('') + '</select></label><div class="toolbar"><button class="btn primary" id="mtSave">Add</button><button class="btn" data-close>Cancel</button></div>',
   (m) => { m.querySelector('#mtSave').onclick = () => { const names = [m.querySelector('#mt1').value, (m.querySelector('#mt2') || { value: '' }).value]; closeModal(); act('/api/admin/teams', { eventKey: ev, names, group: m.querySelector('#mtG').value }, 'POST', 'Added'); }; });
   p.querySelector('#leagueBtn').onclick = () => confirmBox('Create the round robin for ' + groups.length + ' group(s) in ' + ev + (league.length ? '? Existing league matches will be replaced.' : '?'), 'Create matches', () => act('/api/admin/events/' + enc + '/league', {}, 'POST', 'League matches created'));
-  p.querySelector('#koBtn').onclick = () => confirmBox('Build the knockout draw from the top ' + f.knockout.qualifiers + ' of each group?' + (ko.length ? ' The current knockout matches will be replaced.' : ''), 'Generate draw', () => act('/api/admin/events/' + enc + '/knockout', {}, 'POST', 'Knockout draw created'));
+  p.querySelector('#koBtn').onclick = () => confirmBox('Build the knockout draw (' + (f.knockout.startRound && f.knockout.startRound !== 'auto' ? 'starting at ' + ((D().startLabels || {})[f.knockout.startRound] || '') : 'top ' + f.knockout.qualifiers + ' of each group') + ') from the current standings?' + (ko.length ? ' The current knockout matches will be replaced.' : ''), 'Generate draw', () => act('/api/admin/events/' + enc + '/knockout', {}, 'POST', 'Knockout draw created'));
   const kc = p.querySelector('#koClear'); if (kc) kc.onclick = () => confirmBox('Delete all knockout matches for ' + ev + '?', 'Clear knockout', () => act('/api/admin/events/' + enc + '/knockout', {}, 'DELETE', 'Knockout cleared'));
   const kv = p.querySelector('#koView'); if (kv) kv.onclick = () => { S.fxEvent = ev; S.fxMode = 'knockout'; location.hash = '#fixtures'; };
 }
@@ -793,10 +800,10 @@ function renderConsole(root, m) {
   const [wa, wb] = tally(m);
   if (m.status === 'done' || m.status === 'bye') {
     const st = m.stage === 'league' && (D().standings[m.event_key] || {})[m.grp];
-    const fq = fmtOf(m.event_key).knockout.qualifiers;
+    const qs = qualSet(m.event_key);
     root.innerHTML = head + '<div class="card result-card"><span class="eyebrow">Match finished' + (m.result_note ? ' · ' + esc(m.result_note) : '') + '</span><h2>' + esc(teamName(m.winner, tm)) + ' win</h2><p class="tab-num" style="font-family:var(--mono);font-size:18px">' + wa + ' – ' + wb + (g.filter((x) => x[0] || x[1]).length ? ' · ' + esc(g.filter((x) => x[0] || x[1]).map((x) => x[0] + '–' + x[1]).join(', ')) : '') + '</p>' +
       (st ? '<h3 style="margin-top:8px">Group ' + esc(m.grp) + ' points table</h3><div class="table-wrap"><table class="std"><thead><tr><th>' + (isPair(m.event_key) ? 'Team' : 'Player') + '</th><th>P</th><th>W</th><th>L</th><th>+/−</th><th>Pts</th></tr></thead><tbody>' +
-        st.map((r, i) => '<tr class="' + (i < fq ? 'q' : '') + '"' + (r.team === m.winner ? ' style="font-weight:700"' : '') + '><td>' + esc(teamName(r.team, tm)) + '</td><td>' + r.p + '</td><td>' + r.w + '</td><td>' + r.l + '</td><td>' + (r.pf - r.pa > 0 ? '+' : '') + (r.pf - r.pa) + '</td><td><b>' + r.pts + '</b></td></tr>').join('') + '</tbody></table></div>'
+        st.map((r) => '<tr class="' + (qs.has(r.team) ? 'q' : '') + '"' + (r.team === m.winner ? ' style="font-weight:700"' : '') + '><td>' + esc(teamName(r.team, tm)) + '</td><td>' + r.p + '</td><td>' + r.w + '</td><td>' + r.l + '</td><td>' + (r.pf - r.pa > 0 ? '+' : '') + (r.pf - r.pa) + '</td><td><b>' + r.pts + '</b></td></tr>').join('') + '</tbody></table></div>'
         : m.stage === 'knockout' ? '<p>' + (m.next_match_id ? 'The winner moves into the next round of the bracket.' : 'This was the final.') + '</p>' : '') +
       '<div class="toolbar"><button class="btn primary" id="scNext">Score another match</button><button class="btn small" data-sc="undo">Undo last point</button></div><p style="font-size:13px;color:var(--muted)">Pressed the wrong side on match point? Undo reopens the match and reverses the result.</p></div>';
     bindBack(root);

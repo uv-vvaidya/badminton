@@ -249,6 +249,11 @@ function computeStandings(teams, matches) {
   return out;
 }
 
+function qualifierMap(settings, teams, matches) {
+  const st = computeStandings(teams, matches), out = {};
+  for (const ek of Object.keys(st)) out[ek] = T.selectQualifiers(st[ek], T.formatFor(settings, ek).knockout);
+  return out;
+}
 app.get('/api/state', ah(async (req, res) => {
   const { settings, teams, matches, regs } = await loadAll();
   const formats = {};
@@ -257,7 +262,7 @@ app.get('/api/state', ah(async (req, res) => {
   res.set('Cache-Control', 'no-store');
   const officials = {};
   (await q("SELECT id, username, display_name FROM users WHERE role IN ('umpire','scorer')")).rows.forEach((u) => { officials[u.id] = u.display_name || u.username; });
-  res.json({ settings: pub, formats, teams, matches, players: regs, standings: computeStandings(teams, matches), eventKeys: T.EVENT_KEYS, categories: T.CATEGORIES, categoryLabels: T.CATEGORY_LABELS, officials, presence: presence() });
+  res.json({ settings: pub, formats, teams, matches, players: regs, standings: computeStandings(teams, matches), eventKeys: T.EVENT_KEYS, categories: T.CATEGORIES, categoryLabels: T.CATEGORY_LABELS, officials, presence: presence(), qualifiers: qualifierMap(settings, teams, matches), startLabels: T.START_LABELS });
 }));
 
 app.get('/api/stream', (req, res) => {
@@ -618,9 +623,10 @@ admin.post('/events/:ek/knockout', ah(async (req, res) => {
   const league = matches.filter((m) => m.event_key === ek && m.stage === 'league');
   const unfinished = league.filter((m) => m.status !== 'done').length;
   if (unfinished && !req.body.force) throw new HttpError(409, `${unfinished} league match(es) are not finished. Standings may still change.`);
-  const qualifiers = [];
-  for (const [g, rows] of Object.entries(st)) rows.slice(0, f.qualifiers).forEach((r, i) => qualifiers.push({ team: r.team, group: g, rank: i + 1 }));
+  const qualifiers = T.selectQualifiers(st, f);
   const bracket = T.buildBracket(qualifiers);
+  const wanted = T.START_ROUNDS[f.startRound];
+  if (wanted && qualifiers.length < wanted && !req.body.force) throw new HttpError(409, `Only ${qualifiers.length} entries are in groups, fewer than the ${wanted} needed to start at the ${T.START_LABELS[f.startRound].replace(/ \(.*\)/, '')}. The draw will start at a later round${qualifiers.length < wanted ? ' or use byes' : ''}.`);
   if (!bracket) throw bad('At least two qualifiers are needed for a knockout.');
   await tx(async (c) => {
     await c.query("DELETE FROM matches WHERE event_key=$1 AND stage='knockout'", [ek]);
