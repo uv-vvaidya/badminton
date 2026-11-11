@@ -25,6 +25,8 @@ const DEFAULT_SETTINGS = {
   footerEmail: process.env.FOOTER_EMAIL || 'varadarajrv@gmail.com',
   payNote: 'Pay the entry fee by UPI, then upload the screenshot below.',
   qrId: '', gifId: '', regOpen: true,
+  feeBasis: 'player', // doubles: 'player' (each pays) or 'team' (one payment)
+  fees: {}, // entry fee by event, e.g. { 'Men Singles': 300 }
   events: T.CATEGORIES,
   formats: {},
 };
@@ -336,13 +338,14 @@ app.post('/api/register', limiter(20, 60 * 60e3), upload.fields([{ name: 'photo'
     const photoId = await saveFile(photo, false, c);
     const payId = await saveFile(pay, true, c);
     return (await c.query(
-      `INSERT INTO registrations (first_name,last_name,mobile,category,event,event_key,has_partner,partner_name,partner_mobile,about,photo_id,payment_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
-      [first, last, mobile, category, event, T.eventKey(category, event), hasPartner, partnerName, partnerMobile, str(b.about, 500), photoId, payId],
+      `INSERT INTO registrations (first_name,last_name,mobile,category,event,event_key,has_partner,partner_name,partner_mobile,about,photo_id,payment_id,amount_due)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
+      [first, last, mobile, category, event, T.eventKey(category, event), hasPartner, partnerName, partnerMobile, str(b.about, 500), photoId, payId,
+        Number.isFinite((s.fees || {})[T.eventKey(category, event)]) ? s.fees[T.eventKey(category, event)] : null],
     )).rows[0];
   });
   broadcast();
-  res.json({ ok: true, id: row.id, eventKey: T.eventKey(category, event) });
+  res.json({ ok: true, id: row.id, eventKey: T.eventKey(category, event), amountDue: (s.fees || {})[T.eventKey(category, event)] ?? null });
 }));
 
 // ---------- admin: settings, files, users ----------
@@ -355,6 +358,18 @@ admin.put('/settings', ah(async (req, res) => {
   const b = req.body || {};
   for (const k of TEXT_FIELDS) if (k in b) s[k] = str(b[k], 4000);
   if ('regOpen' in b) s.regOpen = !!b.regOpen;
+  if ('feeBasis' in b) s.feeBasis = b.feeBasis === 'team' ? 'team' : 'player';
+  if (b.fees && typeof b.fees === 'object') {
+    const fees = {};
+    for (const ek of T.EVENT_KEYS) {
+      const v = b.fees[ek];
+      if (v === '' || v === null || v === undefined) continue;
+      const n = Math.round(Number(v));
+      if (!Number.isFinite(n) || n < 0 || n > 100000) throw bad(`Fee for ${ek} must be a whole amount between 0 and 100000.`);
+      fees[ek] = n;
+    }
+    s.fees = fees;
+  }
   if (b.events && typeof b.events === 'object') {
     const ev = {};
     for (const [cat, list] of Object.entries(T.CATEGORIES)) ev[cat] = list.filter((e) => (b.events[cat] || []).includes(e));

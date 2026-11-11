@@ -73,6 +73,8 @@ const D = () => S.data || { settings: {}, formats: {}, teams: [], matches: [], p
 const teamMap = () => { const m = {}; D().teams.forEach((t) => { m[t.id] = t; }); return m; };
 const teamName = (id, tm = teamMap()) => (id && tm[id] ? (tm[id].names || []).join(' / ') : 'TBD');
 const fmtOf = (ek) => D().formats[ek] || { groups: 2, league: { points: 21, bestOf: 1, cap: 30 }, knockout: { qualifiers: 2, points: 21, bestOf: 3, cap: 30 } };
+const feeFor = (ek) => { const f = (D().settings.fees || {})[ek]; return Number.isFinite(f) ? f : null; };
+const money = (n) => '₹' + Number(n).toLocaleString('en-IN');
 const qualSet = (ek) => new Set(((D().qualifiers || {})[ek] || []).map((q) => q.team));
 function koRule(k) {
   return !k.startRound || k.startRound === 'auto' ? 'Top <b>' + k.qualifiers + '</b> per group go through' : 'Knockout starts at <b>' + esc(((D().startLabels || {})[k.startRound] || '').replace(/ \(.*\)/, '')) + '</b>: best <b>' + ({ QF: 8, SF: 4, F: 2 }[k.startRound]) + '</b> from the groups';
@@ -180,7 +182,7 @@ function renderHome() {
   renderHomeStats();
   $('#hFee').textContent = c.fee || '';
   $('#hEvents').innerHTML = Object.entries(c.events || {}).filter(([, evs]) => evs.length).map(([cat, evs]) => '<div class="event-card"><h3>' + esc((D().categoryLabels || {})[cat] || cat) + '</h3><div class="chips">' +
-    evs.map((e) => '<span class="chip">' + esc(e) + ' · ' + ps.filter((x) => x.category === cat && x.event === e).length + '</span>').join('') + '</div></div>').join('');
+    evs.map((e) => { const ek = e === 'Mixed Doubles' ? 'Mixed Doubles' : cat + ' ' + e; const fee = feeFor(ek); return '<span class="chip">' + esc(e) + ' · ' + ps.filter((x) => x.category === cat && x.event === e).length + (fee !== null ? ' · ' + money(fee) : '') + '</span>'; }).join('') + '</div></div>').join('');
   $('#hAbout').textContent = c.about || '';
   const li = (t) => lines(t).map((l, i) => { const p = l.split(' · '); return '<li><span class="k">' + (p.length > 1 ? '' : String(i + 1).padStart(2, '0')) + '</span><span>' + (p.length > 1 ? '<b>' + esc(p[0]) + '</b> · ' + esc(p.slice(1).join(' · ')) : esc(l)) + '</span></li>'; }).join('');
   $('#hRules').innerHTML = li(c.rules); $('#hSchedule').innerHTML = li(c.schedule); $('#hPrizes').innerHTML = li(c.prizes);
@@ -207,10 +209,24 @@ function renderRegister() {
   const gate = regGate(); $('#regGate').innerHTML = gate; $('#regForm').hidden = !!gate;
   const c = D().settings;
   $('#regDeadlineChip').textContent = c.regDeadline ? 'Closes ' + fmtDay(c.regDeadline) : 'Registration open';
-  $('#payInfo').innerHTML = '<div class="pay">' + (c.qrId ? '<img src="' + fileUrl(c.qrId) + '" alt="Payment QR code">' : '') + '<div style="display:grid;gap:4px"><b>' + esc(c.fee) + '</b><span>' + esc(c.payNote) + '</span>' +
-    (c.upiId ? '<span>UPI ID: <span class="copyable">' + esc(c.upiId) + '</span> <button type="button" class="btn small" id="cpUpi">Copy</button></span>' : '') + '</div></div>';
-  const cp = $('#cpUpi'); if (cp) cp.onclick = () => navigator.clipboard.writeText(c.upiId).then(() => toast('UPI ID copied'), () => toast('Select the UPI ID to copy it'));
   syncEventOptions();
+}
+function renderPayInfo() {
+  const c = D().settings;
+  const cat = ($('input[name=cat]:checked') || {}).value, evt = ($('input[name=evt]:checked') || {}).value;
+  const ek = cat && evt ? (evt === 'Mixed Doubles' ? 'Mixed Doubles' : cat + ' ' + evt) : null;
+  const amt = ek ? feeFor(ek) : null;
+  const anyFees = Object.keys(c.fees || {}).length > 0;
+  const amountLine = ek && amt !== null
+    ? '<div class="amount-due"><span>Amount to pay for ' + esc(ek) + '</span><b class="tab-num">' + money(amt) + '</b><small>' + (!isPair(ek) ? 'Entry fee' : c.feeBasis === 'team' ? 'Per team: one payment covers you and your partner' : 'Per player: your partner pays separately') + '</small></div>'
+    : ek && anyFees ? '<div class="amount-due muted"><span>No fixed amount is set for ' + esc(ek) + '. Follow the payment instructions below.</span></div>'
+    : anyFees ? '<div class="amount-due muted"><span>Pick a category and event to see the amount to pay.</span></div>' : '';
+  const name = ($('#fFirst').value.trim() + ' ' + $('#fLast').value.trim()).trim();
+  const upiLink = c.upiId && amt ? 'upi://pay?pa=' + encodeURIComponent(c.upiId) + '&pn=' + encodeURIComponent(c.name || 'Tournament') + '&am=' + amt + '&cu=INR&tn=' + encodeURIComponent((ek + ' ' + name).trim().slice(0, 60)) : '';
+  $('#payInfo').innerHTML = amountLine + '<div class="pay">' + (c.qrId ? '<img src="' + fileUrl(c.qrId) + '" alt="Payment QR code">' : '') + '<div style="display:grid;gap:6px">' + (anyFees ? '' : '<b>' + esc(c.fee) + '</b>') + '<span>' + esc(c.payNote) + '</span>' +
+    (c.upiId ? '<span>UPI ID: <span class="copyable">' + esc(c.upiId) + '</span> <button type="button" class="btn small" id="cpUpi">Copy</button></span>' : '') +
+    (upiLink ? '<a class="btn primary small upi-btn" href="' + upiLink + '">Pay ' + money(amt) + ' with a UPI app</a><small style="color:var(--muted)">Opens GPay, PhonePe or Paytm on your phone with the amount filled in. On a computer, scan the QR code and enter ' + money(amt) + '.</small>' : '') + '</div></div>';
+  const cp = $('#cpUpi'); if (cp) cp.onclick = () => navigator.clipboard.writeText(c.upiId).then(() => toast('UPI ID copied'), () => toast('Select the UPI ID to copy it'));
 }
 function syncEventOptions() {
   const evMap = D().settings.events || {};
@@ -223,8 +239,10 @@ function syncEventOptions() {
   const hp = ($('input[name=haspartner]:checked') || {}).value;
   $('#partnerFields').hidden = hp !== 'yes'; $('#assignNote').hidden = hp !== 'no';
   $('#evtHint').textContent = evt === 'Mixed Doubles' ? 'Mixed doubles pairs one man and one woman.' : 'Playing more than one event? Submit one registration per event.';
+  if (S.data) renderPayInfo();
 }
 $('#regForm').addEventListener('change', syncEventOptions);
+['#fFirst', '#fLast'].forEach((sel) => $(sel).addEventListener('blur', () => { if (S.data) renderPayInfo(); }));
 function previewFile(input, img, txt, key) {
   input.addEventListener('change', () => { const f = input.files[0]; files[key] = f || null; if (f) { img.src = URL.createObjectURL(f); img.hidden = false; txt.textContent = f.name; } else img.hidden = true; });
 }
@@ -256,7 +274,7 @@ $('#regForm').addEventListener('submit', async (ev) => {
     $('#regForm').reset(); files.photo = files.pay = null; ['#fPhotoPrev', '#fPayPrev'].forEach((s) => { $(s).hidden = true; });
     $('#fPhotoTxt').textContent = 'Choose a clear face photo (JPG or PNG)'; $('#fPayTxt').textContent = 'Upload the UPI / bank transfer screenshot';
     syncEventOptions(); msg.textContent = '';
-    $('#myRegs').innerHTML = '<div class="card" style="display:grid;gap:8px"><h3>You are registered</h3><p><b>' + esc(name) + '</b> · ' + esc(r.eventKey) + '. The committee will check your payment and confirm your entry. Confirmed players appear on the Fixtures tab.</p><p style="color:var(--muted)">Registration number #' + esc(r.id) + '</p></div>';
+    $('#myRegs').innerHTML = '<div class="card" style="display:grid;gap:8px"><h3>You are registered</h3><p><b>' + esc(name) + '</b> · ' + esc(r.eventKey) + '. ' + (r.amountDue != null ? 'Amount due: <b>' + money(r.amountDue) + '</b>. ' : '') + 'The committee will check your payment and confirm your entry. Confirmed players appear on the Fixtures tab.</p><p style="color:var(--muted)">Registration number #' + esc(r.id) + '</p></div>';
     $('#myRegs').scrollIntoView({ behavior: 'smooth' });
     refresh();
   } catch (e) { err('Registration was not saved: ' + e.message); } finally { btn.disabled = false; }
@@ -451,6 +469,7 @@ function adminRegs(p) {
         '<div><b>' + esc(name) + '</b> · ' + esc(r.event_key) + ' ' + statusChip(r.status) + '<div class="sub">#' + r.id + ' · Mobile <span class="copyable">' + esc(r.mobile) + '</span>' +
         (r.event !== 'Singles' ? (r.has_partner ? ' · Partner: ' + esc(r.partner_name) + ' (<span class="copyable">' + esc(r.partner_mobile) + '</span>)' : ' · Needs a partner') : '') +
         (r.team_id ? ' · Team: ' + esc(teamName(r.team_id)) : '') + ' · ' + new Date(r.created_at).toLocaleDateString() + '</div>' + (r.about ? '<div class="sub">' + esc(r.about) + '</div>' : '') + '</div><div class="act">' +
+        (r.amount_due != null ? '<span class="chip cork">Due ' + money(r.amount_due) + '</span>' : '') +
         (r.payment_id ? '<button class="btn small" data-img="' + r.payment_id + '">Payment</button>' : '') +
         (r.status !== 'approved' ? '<button class="btn small primary" data-ap="' + r.id + '">Confirm</button>' : '') +
         (r.status !== 'rejected' ? '<button class="btn small danger" data-rj="' + r.id + '">Reject</button>' : '') + '</div></div>';
@@ -648,6 +667,9 @@ function adminSettings(p) {
     ta('cRules', 'Format & rules', c.rules, 'one per line') + ta('cSchedule', 'Schedule', c.schedule, "one per line; use ' · ' between day and detail") + ta('cPrizes', 'Prizes', c.prizes, 'one per line') +
     '<div class="row">' + f('cContact', 'Contact name', c.contactName) + f('cPhone', 'Contact phone', c.contactPhone, 'tel') + '</div>' + f('cFootEmail', 'Footer contact email', c.footerEmail, 'email', 'shown after "All rights reserved"') +
     '<h3 style="margin-top:8px">Registration &amp; payment</h3><div class="row">' + f('cFee', 'Fee text', c.fee) + f('cUpi', 'UPI ID', c.upiId) + '</div>' + f('cPayNote', 'Payment instructions', c.payNote) +
+    '<fieldset><legend>Entry fee (₹)</legend><p class="sub">Shown on the register page when a player picks that event, and saved with each registration so you can check the screenshot against it. Leave blank for no fixed amount.</p><div class="fee-grid">' +
+      (D().eventKeys || []).map((ek) => '<label class="f">' + esc(ek) + '<input type="number" min="0" max="100000" step="1" inputmode="numeric" data-fee="' + esc(ek) + '" value="' + (Number.isFinite((c.fees || {})[ek]) ? c.fees[ek] : '') + '" placeholder="—"></label>').join('') +
+      '</div><div class="toolbar"><label class="f" style="display:flex;gap:8px;align-items:center;font-weight:500">Doubles fee is<select id="feeBasis"><option value="player" ' + (c.feeBasis !== 'team' ? 'selected' : '') + '>per player</option><option value="team" ' + (c.feeBasis === 'team' ? 'selected' : '') + '>per team</option></select></label><input type="number" id="feeAll" min="0" placeholder="Same amount for all" style="width:200px"><button type="button" class="btn small" id="feeAllBtn">Fill all</button></div></fieldset>' +
     '<fieldset><legend>Events open for registration</legend><div class="seg">' + Object.entries(cats).flatMap(([cat, evs]) => evs.map((e) => { const on = ((c.events || {})[cat] || []).includes(e); return '<label><input type="checkbox" data-cat="' + cat + '" data-evt="' + e + '" ' + (on ? 'checked' : '') + '><span>' + esc(catLabel(cat)) + ' · ' + e + '</span></label>'; })).join('') + '</div></fieldset>' +
     '<label class="f" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="cOpen" ' + (c.regOpen ? 'checked' : '') + '> Registrations open</label>' +
     '<div class="toolbar"><button class="btn primary">Save settings</button><span class="msg" id="cfgMsg"></span></div></form>' +
@@ -658,8 +680,9 @@ function adminSettings(p) {
     e.preventDefault();
     const events = {}; Object.keys(cats).forEach((k) => { events[k] = []; });
     $$('[data-cat]', p).forEach((cb) => { if (cb.checked) events[cb.dataset.cat].push(cb.dataset.evt); });
-    act('/api/admin/settings', { name: v('#cName'), eyebrow: v('#cEyebrow'), tagline: v('#cTag'), startDate: v('#cStart'), dateText: v('#cDateText'), venue: v('#cVenue'), regDeadline: v('#cDeadline'), about: p.querySelector('#cAbout').value, rules: p.querySelector('#cRules').value, schedule: p.querySelector('#cSchedule').value, prizes: p.querySelector('#cPrizes').value, contactName: v('#cContact'), contactPhone: v('#cPhone'), footerEmail: v('#cFootEmail'), fee: v('#cFee'), upiId: v('#cUpi'), payNote: v('#cPayNote'), events, regOpen: p.querySelector('#cOpen').checked }, 'PUT', 'Settings saved');
+    act('/api/admin/settings', { name: v('#cName'), eyebrow: v('#cEyebrow'), tagline: v('#cTag'), startDate: v('#cStart'), dateText: v('#cDateText'), venue: v('#cVenue'), regDeadline: v('#cDeadline'), about: p.querySelector('#cAbout').value, rules: p.querySelector('#cRules').value, schedule: p.querySelector('#cSchedule').value, prizes: p.querySelector('#cPrizes').value, contactName: v('#cContact'), contactPhone: v('#cPhone'), footerEmail: v('#cFootEmail'), fee: v('#cFee'), upiId: v('#cUpi'), payNote: v('#cPayNote'), events, feeBasis: p.querySelector('#feeBasis').value, fees: Object.fromEntries($$('[data-fee]', p).map((i) => [i.dataset.fee, i.value.trim()])), regOpen: p.querySelector('#cOpen').checked }, 'PUT', 'Settings saved');
   };
+  p.querySelector('#feeAllBtn').onclick = () => { const v2 = p.querySelector('#feeAll').value; if (v2 !== '') $$('[data-fee]', p).forEach((i) => { i.value = v2; }); };
   const up = (sel, key) => {
     p.querySelector(sel).onchange = async (e) => {
       const fl = e.target.files[0]; if (!fl) return;

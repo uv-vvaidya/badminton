@@ -272,3 +272,11 @@ table.sched .sm-teams span{color:var(--muted);font-weight:400;font-size:12px}
 table.sched .sub{font-size:12px;color:var(--muted)}
 .result-edit{border:1px solid var(--line);border-radius:8px;padding:12px;display:grid;gap:8px}
 table.sched th{text-align:left}
+
+/* entry fee */
+.amount-due{display:grid;grid-template-columns:1fr auto;align-items:center;gap:2px 12px;padding:12px 14px;margin-bottom:12px;border-radius:8px;background:var(--cork-soft);border:1.5px solid var(--cork)}
+.amount-due b{font-family:var(--display);font-size:32px;line-height:1;color:var(--cork);grid-row:span 2}
+.amount-due small{color:var(--muted)}
+.amount-due.muted{background:transparent;border-style:dashed;display:block;color:var(--muted)}
+.upi-btn{justify-self:start}
+.fee-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,170px),1fr));gap:10px}
