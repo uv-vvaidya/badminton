@@ -113,7 +113,7 @@ form.card,.card{background:var(--surface);border:1px solid var(--line);border-ra
 @media (max-width:600px){.row{grid-template-columns:1fr}}
 label.f{display:grid;gap:6px;font-weight:600;font-size:14px}
 label.f small{font-weight:400;color:var(--muted)}
-input[type=text],input[type=tel],input[type=password],input[type=number],input[type=datetime-local],input[type=date],select,textarea{width:100%;padding:10px 12px;border:1.5px solid var(--line);border-radius:8px;background:var(--bg);min-width:0}
+input[type=text],input[type=tel],input[type=password],input[type=number],input[type=datetime-local],input[type=date],input[type=time],input[type=email],select,textarea{width:100%;padding:10px 12px;border:1.5px solid var(--line);border-radius:8px;background:var(--bg);min-width:0}
 textarea{min-height:90px;resize:vertical}
 input:focus,select:focus,textarea:focus{border-color:var(--court);outline:none}
 fieldset{border:0;padding:0;margin:0;display:grid;gap:8px}
@@ -285,3 +285,27 @@ table.sched th{text-align:left}
 .export-bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:24px;padding:12px 14px;border:1px dashed var(--line);border-radius:var(--r)}
 .export-bar>span{font-size:13px;font-weight:600;color:var(--muted);margin-right:4px}
 .export-bar .btn.ghost{border-width:1px;color:var(--ink)}
+
+/* practice poll */
+.poll-head{display:grid;gap:6px}
+.poll-head h3{font-size:28px}
+.poll-deadline{font-weight:600;color:var(--good)}
+.poll-deadline.closed{color:var(--bad)}
+.poll-vote{display:grid;gap:12px}
+.vote-btns{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.vote{all:unset;box-sizing:border-box;cursor:pointer;text-align:center;padding:22px 12px;border-radius:12px;font-weight:800;font-size:18px;border:2px solid var(--line);background:var(--bg)}
+.vote:focus-visible{outline:3px solid var(--cork);outline-offset:2px}
+.vote.yes.on{background:var(--good);border-color:var(--good);color:#fff}
+.vote.no.on{background:var(--bad);border-color:var(--bad);color:#fff}
+.vote:disabled{opacity:.55;cursor:not-allowed}
+.names{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:4px}
+.names li{padding:6px 0;border-bottom:1px solid var(--line)}
+.poll-admin{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.poll-admin>div{min-width:0}
+.poll-admin h4{margin:0;font-size:14px}
+@media (max-width:640px){.vote-btns,.poll-admin{grid-template-columns:1fr}}
+
+.share-link{padding:8px 10px;background:var(--surface-2);border-radius:6px;font-family:var(--mono);font-size:13px;overflow-wrap:anywhere}
+table.members td{text-align:left;vertical-align:middle}
+table.members th{text-align:left}
+.mem-act{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}

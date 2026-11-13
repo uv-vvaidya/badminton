@@ -20,6 +20,7 @@
       <a href="#home" data-view="home">Home</a>
       <a href="#register" data-view="register">Register</a>
       <a href="#fixtures" data-view="fixtures">Fixtures</a>
+      <a href="#practice" data-view="practice" id="navPractice" hidden>Practice</a>
       <a href="#live" data-view="live"><i class="live-dot" id="navLiveDot"></i>Live</a>
       <a href="#score" data-view="score" id="navScore" hidden>Score</a>
       <a href="#admin" data-view="admin" id="navAdmin">Login</a>
@@ -146,6 +147,14 @@
       <div style="display:grid;gap:12px;align-content:start"><h3>Up next</h3><div class="matches" id="liveNext"></div></div>
       <div style="display:grid;gap:12px;align-content:start"><h3>Latest results</h3><div class="matches" id="liveDone"></div></div>
     </div>
+  </main>
+</section>
+
+<!-- PRACTICE POLL -->
+<section class="view wrap" id="view-practice" hidden>
+  <main style="display:grid;gap:18px;max-width:760px">
+    <div class="section-head"><h2>Daily practice</h2><span class="chip" id="prChip"></span></div>
+    <div id="practiceBody"><p class="note">Loading…</p></div>
   </main>
 </section>
 

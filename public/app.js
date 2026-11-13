@@ -135,7 +135,7 @@ function connectStream() {
 }
 
 // ---------- routing ----------
-const VIEWS = ['home', 'register', 'fixtures', 'live', 'score', 'admin'];
+const VIEWS = ['home', 'register', 'fixtures', 'live', 'practice', 'score', 'admin'];
 function route() {
   let v = (location.hash || '#home').slice(1); if (!VIEWS.includes(v)) v = 'home';
   S.view = v;
@@ -151,11 +151,13 @@ function renderAll() {
   $('#navLiveDot').classList.toggle('on', D().matches.some((m) => m.status === 'live'));
   $('#navAdmin').textContent = S.user ? (S.user.role === 'admin' ? 'Admin' : 'Account') : 'Login';
   $('#navScore').hidden = !S.user;
+  $('#navPractice').hidden = !(D().settings.practiceEnabled || (S.user && S.user.role === 'admin'));
 }
 function renderView() {
   if (S.view === 'register') renderRegister();
   if (S.view === 'fixtures') renderFixtures();
   if (S.view === 'live') renderLive();
+  if (S.view === 'practice') loadPractice();
   if (S.view === 'score') renderScore();
   if (S.view === 'admin') renderAdmin();
 }
@@ -412,7 +414,7 @@ function renderAdmin() {
       ' Open the Score tab, pick a match, choose who serves first, then tap a side for every rally. Games and matches end on their own, and the points table updates when a match finishes.</p><a class="btn primary" href="#score" style="justify-self:start">Open the Score tab</a></div>' + passwordCard();
     bindPassword(); return;
   }
-  const tabs = [['regs', 'Registrations'], ['event', 'Event setup'], ['matches', 'Matches'], ['settings', 'Settings'], ['users', 'Users'], ['data', 'Testing & reset']];
+  const tabs = [['regs', 'Registrations'], ['event', 'Event setup'], ['matches', 'Matches'], ['settings', 'Settings'], ['users', 'Users'], ['practice', 'Practice poll'], ['data', 'Testing & reset']];
   body.innerHTML = '<div class="admin-tabs">' + tabs.map(([k, l]) => '<button aria-pressed="' + (S.adminTab === k) + '" data-tab="' + k + '">' + l + '</button>').join('') + '</div><div id="adminPane" style="margin-top:16px"></div>';
   body.querySelector('.admin-tabs').onclick = async (e) => {
     const b = e.target.closest('button'); if (!b) return; S.adminTab = b.dataset.tab;
@@ -420,7 +422,7 @@ function renderAdmin() {
     if (S.adminTab === 'users') S.users = await api('/api/admin/users').catch(() => []);
     renderAdmin();
   };
-  ({ regs: adminRegs, event: adminEvent, matches: adminMatches, settings: adminSettings, users: adminUsers, data: adminData })[S.adminTab]($('#adminPane'));
+  ({ regs: adminRegs, event: adminEvent, matches: adminMatches, settings: adminSettings, users: adminUsers, data: adminData, practice: adminPractice })[S.adminTab]($('#adminPane'));
 }
 
 function renderSetup(body) {
@@ -702,6 +704,137 @@ function adminSettings(p) {
   };
   up('#upGif', 'gifId'); up('#upQr', 'qrId');
   const rm = p.querySelector('#rmGif'); if (rm) rm.onclick = () => act('/api/admin/settings', { gifId: '' }, 'PUT', 'GIF removed');
+}
+
+// ---------- PRACTICE POLL ----------
+let voterToken = null;
+try { voterToken = localStorage.getItem('uvb-voter'); } catch (e) { /* private mode */ }
+// A personal link (…/?v=TOKEN#practice) signs the person in on this phone.
+(() => {
+  const u = new URL(location.href);
+  const t = u.searchParams.get('v');
+  if (t && /^m\d+\.[a-f0-9]{32}$/.test(t)) {
+    voterToken = t; try { localStorage.setItem('uvb-voter', t); } catch (e) { /* ignore */ }
+    u.searchParams.delete('v'); history.replaceState(null, '', u.pathname + u.search + (u.hash || '#practice'));
+  }
+})();
+const setVoter = (t) => { voterToken = t; try { if (t) localStorage.setItem('uvb-voter', t); else localStorage.removeItem('uvb-voter'); } catch (e) { /* ignore */ } };
+const fmtDayLong = (ymd) => new Date(ymd + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' });
+const fmtCut = (hhmm) => { const [h, m] = hhmm.split(':').map(Number); return new Date(2000, 0, 1, h, m).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }); };
+let practiceBusy = false, practiceTimer = null;
+async function loadPractice() {
+  if (practiceBusy) return;
+  practiceBusy = true;
+  try {
+    const r = await fetch('/api/practice', { headers: voterToken ? { 'X-Voter-Token': voterToken } : {}, credentials: 'same-origin' });
+    S.practice = await r.json();
+    if (voterToken && !S.practice.me) setVoter(null); // token no longer valid (e.g. registration removed)
+    renderPractice();
+  } catch (e) { $('#practiceBody').innerHTML = '<p class="note warn">Could not load the poll. Check your connection and reload.</p>'; }
+  finally { practiceBusy = false; }
+}
+function minutesLeft(now, cut) { const [a, b] = now.split(':').map(Number), [c, d] = cut.split(':').map(Number); return (c * 60 + d) - (a * 60 + b); }
+function renderPractice() {
+  const P = S.practice; if (!P) return;
+  const root = $('#practiceBody');
+  clearInterval(practiceTimer);
+  if (!P.enabled) {
+    $('#prChip').textContent = 'Off';
+    root.innerHTML = '<div class="card"><p>The practice poll is not running right now.' + (S.user && S.user.role === 'admin' ? ' Turn it on in Admin → Practice poll.' : ' Check back later.') + '</p></div>';
+    return;
+  }
+  const left = minutesLeft(P.now, P.cutoff);
+  $('#prChip').textContent = P.open ? 'Voting open' : 'Voting closed';
+  $('#prChip').className = 'chip ' + (P.open ? 'good' : 'bad');
+  const head = '<div class="card poll-head"><span class="eyebrow">' + (P.for === 'tomorrow' ? "Tomorrow's practice" : "Today's practice") + '</span><h3>' + esc(fmtDayLong(P.day)) + '</h3>' +
+    (P.note ? '<p>' + esc(P.note) + '</p>' : '') +
+    '<p class="poll-deadline ' + (P.open ? '' : 'closed') + '">' + (P.open ? 'Voting closes at <b>' + esc(fmtCut(P.cutoff)) + '</b>' + (left <= 120 ? ' · ' + (left >= 60 ? Math.floor(left / 60) + 'h ' : '') + (left % 60) + 'm left' : '') : 'Voting closed at ' + esc(fmtCut(P.cutoff)) + '. The next poll opens at midnight.') + '</p></div>';
+  let me = '';
+  if (!P.me) {
+    me = '<form class="card form" id="whoForm"><h3>Enter your mobile number</h3><p class="sub">Use the number the organiser added you with. This phone will remember you after that.</p>' +
+      '<label class="f">Mobile number<input type="tel" id="whoMobile" inputmode="tel" autocomplete="tel" placeholder="98765 43210"></label>' +
+      '<div class="toolbar"><button class="btn primary">Continue</button><span class="msg err" id="whoErr"></span></div></form>';
+  } else {
+    me = '<div class="card poll-vote"><div class="toolbar" style="justify-content:space-between"><span>Voting as <b>' + esc(P.me.name) + '</b></span><button class="btn small" id="notMe">Not you?</button></div>' +
+      '<div class="vote-btns"><button class="vote yes' + (P.me.vote === 'yes' ? ' on' : '') + '" data-vote="yes" ' + (P.open ? '' : 'disabled') + '>Yes, I\'m coming</button><button class="vote no' + (P.me.vote === 'no' ? ' on' : '') + '" data-vote="no" ' + (P.open ? '' : 'disabled') + '>No, not this time</button></div>' +
+      '<p class="sub">' + (P.me.vote ? 'Your answer: <b>' + (P.me.vote === 'yes' ? 'Coming' : 'Not coming') + '</b>.' + (P.open ? ' You can change it until ' + esc(fmtCut(P.cutoff)) + '.' : '') : P.open ? 'You have not voted yet.' : 'You did not vote for this day.') + '</p></div>';
+  }
+  const list = (arr) => (arr.length ? '<ul class="names">' + arr.map((n) => '<li>' + esc(n) + '</li>').join('') + '</ul>' : '<p class="sub">Nobody yet.</p>');
+  const tally = '<div class="grid-2 poll-tally"><div class="card"><h3>Coming · ' + P.yes.length + '</h3>' + list(P.yes) + '</div><div class="card"><h3>Not coming · ' + P.no.length + '</h3>' + list(P.no) + '</div></div>' +
+    '<p class="sub">' + P.notVoted + ' of ' + P.members + (P.members === 1 ? ' person has' : ' people have') + ' not voted yet.</p>';
+  root.innerHTML = head + me + tally;
+  const wf = $('#whoForm');
+  if (wf) wf.onsubmit = async (e) => {
+    e.preventDefault();
+    try { const r = await api('/api/practice/identify', { method: 'POST', body: { mobile: $('#whoMobile').value } }); setVoter(r.token); toast('Hi ' + r.name); await loadPractice(); }
+    catch (er) { $('#whoErr').textContent = er.message; }
+  };
+  const nm = $('#notMe'); if (nm) nm.onclick = () => { setVoter(null); loadPractice(); };
+  $$('[data-vote]', root).forEach((b) => { b.onclick = async () => {
+    b.disabled = true;
+    try { await api('/api/practice/vote', { method: 'POST', body: { token: voterToken, vote: b.dataset.vote } }); toast(b.dataset.vote === 'yes' ? 'See you at practice' : 'Thanks for letting us know'); await loadPractice(); }
+    catch (er) { toast(er.message); if (er.status === 401) setVoter(null); await loadPractice(); }
+  }; });
+  // Re-check every minute so the poll closes on time without a reload.
+  practiceTimer = setInterval(() => { if (S.view === 'practice') loadPractice(); else clearInterval(practiceTimer); }, 60000);
+}
+
+async function adminPractice(p) {
+  const c = D().settings;
+  p.innerHTML = '<p class="note">Loading…</p>';
+  let A;
+  try { A = await api('/api/admin/practice' + (S.practiceDay ? '?day=' + S.practiceDay : '')); } catch (er) { p.innerHTML = '<p class="note warn">' + esc(er.message) + '</p>'; return; }
+  const yes = A.rows.filter((r) => r.vote === 'yes'), no = A.rows.filter((r) => r.vote === 'no'), none = A.rows.filter((r) => !r.vote);
+  const names = (arr) => (arr.length ? '<ul class="names">' + arr.map((r) => '<li>' + esc(r.name) + '<span class="sub"> · ' + esc(r.mobile) + '</span></li>').join('') + '</ul>' : '<p class="sub">None.</p>');
+  let M = [];
+  try { M = await api('/api/admin/poll-members'); } catch (er) { /* shown below as empty */ }
+  const base = location.origin + '/';
+  const pollLink = base + '#practice';
+  const groupMsg = 'Practice poll: are you coming ' + (c.practiceFor === 'tomorrow' ? 'tomorrow' : 'today') + '? Vote by ' + fmtCut(c.practiceCutoff || '20:00') + ' here: ' + pollLink;
+  const wa = (text, phone) => 'https://wa.me/' + (phone ? '91' + phone.replace(/\D/g, '').slice(-10) : '') + '?text=' + encodeURIComponent(text);
+  p.innerHTML = '<div style="display:grid;gap:16px">' +
+    '<form class="card form" id="prForm"><h3>Poll settings</h3>' +
+    '<label class="f" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="prOn" ' + (c.practiceEnabled ? 'checked' : '') + '> Run the daily practice poll (shows a Practice tab to everyone)</label>' +
+    '<div class="row"><label class="f">Poll is for<select id="prFor"><option value="today" ' + (c.practiceFor !== 'tomorrow' ? 'selected' : '') + '>Today\'s practice</option><option value="tomorrow" ' + (c.practiceFor === 'tomorrow' ? 'selected' : '') + '>Tomorrow\'s practice</option></select></label>' +
+    '<label class="f">Voting closes at <small>every day, India time</small><input type="time" id="prCut" value="' + esc(c.practiceCutoff || '20:00') + '"></label></div>' +
+    '<label class="f">Practice details <small>time and place, shown above the vote buttons</small><input type="text" id="prNote" value="' + esc(c.practiceNote || '') + '" placeholder="e.g. 8:30 PM at Court 2, bring your own racket"></label>' +
+    '<p class="sub">A new poll starts at midnight every day. People can change their answer until the closing time. Only people on the list below can vote.</p>' +
+    '<div class="toolbar"><button class="btn primary">Save poll settings</button></div></form>' +
+    '<div class="card form"><h3>Share the poll</h3><p class="sub">Post this one link in your WhatsApp group. Each person enters their mobile number the first time; after that their phone remembers them.</p>' +
+    '<div class="toolbar"><span class="copyable share-link">' + esc(pollLink) + '</span><button type="button" class="btn small" id="cpPoll">Copy link</button><a class="btn small primary" href="' + wa(groupMsg) + '" target="_blank" rel="noopener">Share on WhatsApp</a></div></div>' +
+    '<div class="card form"><div class="toolbar" style="justify-content:space-between"><h3>People on the poll · ' + M.filter((m) => m.active).length + '</h3></div>' +
+    (M.length ? '<div class="table-wrap"><table class="std members"><thead><tr><th>Name</th><th>Mobile</th><th>Voting</th><th></th></tr></thead><tbody>' + M.map((m) => '<tr><td>' + esc(m.name) + '</td><td class="tab-num">' + esc(m.mobilePretty) + '</td><td><label style="display:flex;gap:6px;align-items:center"><input type="checkbox" data-mact="' + m.id + '" ' + (m.active ? 'checked' : '') + '> ' + (m.active ? 'On' : 'Paused') + '</label></td><td class="mem-act">' +
+      '<a class="btn small" href="' + wa('Hi ' + m.name + ', here is your personal practice poll link. Tap it to vote by ' + fmtCut(c.practiceCutoff || '20:00') + ' each day: ' + base + '?v=' + m.token + '#practice', m.mobile) + '" target="_blank" rel="noopener">Send link</a>' +
+      '<button type="button" class="btn small" data-medit="' + m.id + '">Edit</button><button type="button" class="btn small danger" data-mdel="' + m.id + '">Remove</button></td></tr>').join('') + '</tbody></table></div>' : '<p class="sub">Nobody yet. Add people below.</p>') +
+    '<form id="memOne" class="row" style="align-items:end"><label class="f">Name<input type="text" id="memName" autocomplete="off"></label><label class="f">Mobile<input type="tel" id="memMob" inputmode="tel" autocomplete="off" placeholder="98765 43210"></label></form>' +
+    '<div class="toolbar"><button type="button" class="btn primary small" id="memAdd">Add person</button></div>' +
+    '<details><summary>Add many at once</summary><label class="f" style="margin-top:8px">One person per line: name, then mobile<textarea id="memBulk" placeholder="Ravi Kumar, 98765 43210&#10;Asha Nair 9900012345"></textarea></label><div class="toolbar"><button type="button" class="btn small" id="memBulkAdd">Add all</button></div></details>' +
+    '<p class="sub">"Send link" opens WhatsApp with a personal link that signs that person in directly, so they don\'t need to type their number. Pausing someone hides them from the poll without deleting them.</p></div>' +
+    '<div class="card"><div class="toolbar" style="justify-content:space-between"><h3>' + esc(fmtDayLong(A.viewDay)) + '</h3><span class="chip ' + (A.viewDay === A.day && A.open ? 'good' : '') + '">' + (A.viewDay === A.day ? (A.open ? 'Voting open until ' + esc(fmtCut(A.cutoff)) : 'Voting closed') : 'Past day') + '</span></div>' +
+    '<div class="stats" style="margin:10px 0"><div><b class="tab-num">' + yes.length + '</b><span>Coming</span></div><div><b class="tab-num">' + no.length + '</b><span>Not coming</span></div><div><b class="tab-num">' + none.length + '</b><span>No answer</span></div></div>' +
+    '<div class="poll-admin"><div><h4>Coming</h4>' + names(yes) + '</div><div><h4>Not coming</h4>' + names(no) + '</div><div><h4>No answer</h4>' + names(none) + '</div></div></div>' +
+    '<div class="card"><h3>Recent days</h3>' + (A.history.length ? '<div class="table-wrap"><table class="std"><thead><tr><th>Day</th><th>Coming</th><th>Not coming</th><th></th></tr></thead><tbody>' +
+      A.history.map((h) => '<tr><td>' + esc(fmtDayLong(h.day)) + '</td><td>' + h.yes + '</td><td>' + h.no + '</td><td><button class="btn small" data-pday="' + h.day + '">View</button></td></tr>').join('') + '</tbody></table></div>' : '<p class="sub">No votes yet.</p>') + '</div></div>';
+  p.querySelector('#prForm').onsubmit = (e) => {
+    e.preventDefault();
+    act('/api/admin/settings', { practiceEnabled: p.querySelector('#prOn').checked, practiceFor: p.querySelector('#prFor').value, practiceCutoff: p.querySelector('#prCut').value, practiceNote: p.querySelector('#prNote').value }, 'PUT', 'Poll settings saved');
+  };
+  const cpl = p.querySelector('#cpPoll'); if (cpl) cpl.onclick = () => navigator.clipboard.writeText(pollLink).then(() => toast('Link copied'), () => toast('Select the link to copy it'));
+  const memReload = () => renderAdmin();
+  p.querySelector('#memAdd').onclick = async () => {
+    try { await api('/api/admin/poll-members', { method: 'POST', body: { name: p.querySelector('#memName').value, mobile: p.querySelector('#memMob').value } }); toast('Added'); memReload(); } catch (er) { toast(er.message); }
+  };
+  p.querySelector('#memBulkAdd').onclick = async () => {
+    try { const r = await api('/api/admin/poll-members', { method: 'POST', body: { lines: p.querySelector('#memBulk').value } }); toast('Added ' + r.added + (r.skipped.length ? '. Skipped ' + r.skipped.length + ' line(s) without a valid name and number.' : '')); memReload(); } catch (er) { toast(er.message); }
+  };
+  $$('[data-mact]', p).forEach((cb) => { cb.onchange = async () => { try { await api('/api/admin/poll-members/' + cb.dataset.mact, { method: 'PATCH', body: { active: cb.checked } }); memReload(); } catch (er) { toast(er.message); } }; });
+  $$('[data-mdel]', p).forEach((b) => { b.onclick = () => confirmBox('Remove this person from the poll? Their past votes stay in the history.', 'Remove', async () => { try { await api('/api/admin/poll-members/' + b.dataset.mdel, { method: 'DELETE', body: {} }); memReload(); } catch (er) { toast(er.message); } }); });
+  $$('[data-medit]', p).forEach((b) => { b.onclick = () => {
+    const m = M.find((x) => x.id === +b.dataset.medit);
+    modal('<h3>Edit person</h3><label class="f">Name<input type="text" id="meN" value="' + esc(m.name) + '"></label><label class="f">Mobile<input type="tel" id="meM" value="' + esc(m.mobile) + '"></label><div class="toolbar"><button class="btn primary" id="meS">Save</button><button class="btn" data-close>Cancel</button></div>',
+      (md) => { md.querySelector('#meS').onclick = async () => { try { await api('/api/admin/poll-members/' + m.id, { method: 'PATCH', body: { name: md.querySelector('#meN').value, mobile: md.querySelector('#meM').value } }); closeModal(); memReload(); } catch (er) { toast(er.message); } }; });
+  }; });
+  $$('[data-pday]', p).forEach((b) => { b.onclick = () => { S.practiceDay = b.dataset.pday === A.day ? null : b.dataset.pday; renderAdmin(); }; });
 }
 
 // Testing & reset

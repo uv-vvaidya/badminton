@@ -67,6 +67,13 @@ Standings: 2 points per win, then wins, game difference, point difference, head-
 - **Add knockout match**: pick a round (Round of 32 … Final, Third place, or a custom name), the sides, and where the winner goes (next match, side A or B).
 - **Correct result**: edit game scores, or set the winner directly for a walkover/retirement with a note. Standings recalculate immediately; a corrected knockout winner moves into the next round if that match hasn't started (otherwise you get a warning). **Reset to not played** clears a result.
 
+### Daily practice poll (Admin → Practice poll)
+- Separate from tournament registrations: admins add the people who can vote (name + mobile), one at a time or by pasting a list.
+- **Share on WhatsApp** posts one poll link to your group. Each person enters their mobile number once; their phone remembers them.
+- **Send link** (per person) opens WhatsApp with a personal link that signs them in directly.
+- Each day people vote **Yes, I'm coming** or **No**, and can change it until the cut-off (default **8:00 PM India time**). A new poll opens at midnight.
+- Admins see Coming / Not coming / No answer for each day, with history. Pause or remove people any time.
+
 ## Security notes
 
 - Passwords are hashed with bcrypt. Sessions are random tokens stored hashed, in an HttpOnly, SameSite=Lax cookie (Secure on HTTPS).

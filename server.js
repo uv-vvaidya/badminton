@@ -26,6 +26,8 @@ const DEFAULT_SETTINGS = {
   footerEmail: process.env.FOOTER_EMAIL || 'varadarajrv@gmail.com',
   payNote: 'Pay the entry fee by UPI, then upload the screenshot below.',
   qrId: '', gifId: '', regOpen: true,
+  // Daily practice poll
+  practiceEnabled: false, practiceFor: 'today', practiceCutoff: '20:00', practiceNote: 'Evening practice at the venue.', timeZone: 'Asia/Kolkata',
   feeBasis: 'player', // doubles: 'player' (each pays) or 'team' (one payment)
   fees: {}, // entry fee by event, e.g. { 'Men Singles': 300 }
   events: T.CATEGORIES,
@@ -112,7 +114,7 @@ function broadcastPresence() {
     for (const res of clients.keys()) res.write(msg);
   }, 1000);
 }
-const VIEW_NAMES = ['home', 'register', 'fixtures', 'live', 'score', 'admin'];
+const VIEW_NAMES = ['home', 'register', 'fixtures', 'live', 'practice', 'score', 'admin'];
 const cleanId = (v) => (/^[a-z0-9]{8,40}$/.test(String(v || '')) ? String(v) : null);
 
 // ---------- app ----------
@@ -268,6 +270,153 @@ app.get('/api/state', ah(async (req, res) => {
   res.json({ settings: pub, formats, teams, matches, players: regs, standings: computeStandings(teams, matches), eventKeys: T.EVENT_KEYS, categories: T.CATEGORIES, categoryLabels: T.CATEGORY_LABELS, officials, presence: presence(), qualifiers: qualifierMap(settings, teams, matches), startLabels: T.START_LABELS });
 }));
 
+// ---------- daily practice poll ----------
+// A separate list of people the admin adds by name and mobile (not tournament registrations).
+// Everyone gets the same link (shared on WhatsApp) and identifies with their mobile number once;
+// each person can also get a personal link that signs them in directly.
+// They vote Yes / No for the day's practice until the cut-off time (default 8 PM, India time).
+let VOTE_SECRET = process.env.VOTE_SECRET || null;
+async function voteSecret() {
+  if (VOTE_SECRET) return VOTE_SECRET;
+  const r = await q("SELECT value FROM settings WHERE key='vote_secret'");
+  if (r.rows[0]) VOTE_SECRET = r.rows[0].value.s;
+  else {
+    VOTE_SECRET = crypto.randomBytes(32).toString('hex');
+    await q("INSERT INTO settings (key, value) VALUES ('vote_secret', $1) ON CONFLICT (key) DO NOTHING", [{ s: VOTE_SECRET }]);
+    VOTE_SECRET = (await q("SELECT value FROM settings WHERE key='vote_secret'")).rows[0].value.s;
+  }
+  return VOTE_SECRET;
+}
+const last10 = (m) => String(m || '').replace(/\D/g, '').slice(-10);
+function localNow(tz) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+    .formatToParts(new Date()).map((x) => [x.type, x.value]));
+  return { date: `${parts.year}-${parts.month}-${parts.day}`, time: `${parts.hour}:${parts.minute}` };
+}
+const addDays = (ymd, n) => { const d = new Date(ymd + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+function pollWindow(s) {
+  const tz = s.timeZone || 'Asia/Kolkata';
+  const now = localNow(tz);
+  const day = s.practiceFor === 'tomorrow' ? addDays(now.date, 1) : now.date;
+  const open = !!s.practiceEnabled && now.time < s.practiceCutoff;
+  return { day, today: now.date, now: now.time, cutoff: s.practiceCutoff, open, tz, enabled: !!s.practiceEnabled, for: s.practiceFor };
+}
+const memberKey = (id) => 'm' + id;
+async function pollMembers(includeInactive) {
+  return (await q(`SELECT id, name, mobile, active FROM poll_members ${includeInactive ? '' : 'WHERE active'} ORDER BY lower(name), id`)).rows;
+}
+const signVoter = async (key) => `${key}.${crypto.createHmac('sha256', await voteSecret()).update('voter:' + key).digest('hex').slice(0, 32)}`;
+async function voterFromToken(token) {
+  const t = String(token || '');
+  const [key, sig] = t.split('.');
+  if (!/^m\d+$/.test(key || '') || !sig) return null;
+  const good = await signVoter(key);
+  if (good.length !== t.length || !crypto.timingSafeEqual(Buffer.from(good), Buffer.from(t))) return null;
+  const m = (await q('SELECT id, name, active FROM poll_members WHERE id=$1', [+key.slice(1)])).rows[0];
+  return m && m.active ? { id: m.id, name: m.name, voter: key } : null;
+}
+const prettyMobile = (m) => (m.length === 10 ? `${m.slice(0, 5)} ${m.slice(5)}` : m);
+
+app.get('/api/practice', ah(async (req, res) => {
+  const s = await getSettings();
+  const w = pollWindow(s);
+  const members = await pollMembers(false);
+  const votes = (await q('SELECT voter, name, vote FROM practice_votes WHERE day=$1 ORDER BY updated_at', [w.day])).rows;
+  const activeKeys = new Set(members.map((m) => memberKey(m.id)));
+  const live = votes.filter((v) => activeKeys.has(v.voter));
+  let me = null;
+  const v = await voterFromToken(req.get('X-Voter-Token'));
+  if (v) { const mine = live.find((x) => x.voter === v.voter); me = { name: v.name, vote: mine ? mine.vote : null }; }
+  res.set('Cache-Control', 'no-store');
+  res.json({
+    ...w, note: s.practiceNote, title: s.name, members: members.length,
+    yes: live.filter((x) => x.vote === 'yes').map((x) => x.name), no: live.filter((x) => x.vote === 'no').map((x) => x.name),
+    notVoted: Math.max(0, members.length - live.length), me,
+  });
+}));
+
+app.post('/api/practice/identify', limiter(10, 15 * 60e3), ah(async (req, res) => {
+  const mobile = last10(req.body && req.body.mobile);
+  if (mobile.length !== 10) throw bad('Enter your 10-digit mobile number.');
+  const m = (await q('SELECT id, name FROM poll_members WHERE mobile=$1 AND active', [mobile])).rows[0];
+  if (!m) throw new HttpError(403, "This number isn't on the practice list. Ask the organiser to add you.");
+  res.json({ token: await signVoter(memberKey(m.id)), name: m.name });
+}));
+
+app.post('/api/practice/vote', limiter(60, 60e3), ah(async (req, res) => {
+  const s = await getSettings();
+  const w = pollWindow(s);
+  if (!w.enabled) throw bad('The practice poll is turned off.');
+  if (!w.open) throw new HttpError(403, `Voting closed at ${w.cutoff}. You can vote again tomorrow.`);
+  const v = await voterFromToken(req.body.token);
+  if (!v) throw new HttpError(401, 'Enter your mobile number again, then vote.');
+  const vote = req.body.vote === 'yes' ? 'yes' : req.body.vote === 'no' ? 'no' : null;
+  if (!vote) throw bad('Choose Yes or No.');
+  await q(`INSERT INTO practice_votes (day, voter, reg_id, name, vote) VALUES ($1,$2,NULL,$3,$4)
+           ON CONFLICT (day, voter) DO UPDATE SET vote=EXCLUDED.vote, name=EXCLUDED.name, updated_at=now()`, [w.day, v.voter, v.name, vote]);
+  broadcast();
+  res.json({ ok: true, vote, day: w.day });
+}));
+
+// ---- admin: the voter list ----
+app.get('/api/admin/poll-members', needRole('admin'), ah(async (req, res) => {
+  const rows = await pollMembers(true);
+  res.json(await Promise.all(rows.map(async (m) => ({ ...m, mobilePretty: prettyMobile(m.mobile), token: await signVoter(memberKey(m.id)) }))));
+}));
+// Add one ({name, mobile}) or many ({lines: "Name, mobile\n..."}). Existing numbers are updated, not duplicated.
+app.post('/api/admin/poll-members', needRole('admin'), ah(async (req, res) => {
+  const b = req.body || {};
+  const input = typeof b.lines === 'string'
+    ? b.lines.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).map((l) => {
+      const mob = (l.match(/(\+?\d[\d\s-]{8,}\d)/) || [])[1] || '';
+      return { name: l.replace(mob, '').replace(/[,;\t|-]+\s*$/, '').replace(/^\s*[,;\t|-]+/, '').trim(), mobile: mob, line: l };
+    })
+    : [{ name: b.name, mobile: b.mobile, line: `${b.name || ''} ${b.mobile || ''}` }];
+  const added = [], skipped = [];
+  for (const it of input.slice(0, 500)) {
+    const name = str(it.name, 60), mobile = last10(it.mobile);
+    if (!name || mobile.length !== 10) { skipped.push(it.line.slice(0, 80)); continue; }
+    await q(`INSERT INTO poll_members (name, mobile) VALUES ($1,$2)
+             ON CONFLICT (mobile) DO UPDATE SET name=EXCLUDED.name, active=true`, [name, mobile]);
+    added.push(name);
+  }
+  if (!added.length) throw bad(skipped.length ? `Could not read: ${skipped.slice(0, 3).join(' | ')}. Use one person per line: Name, 10-digit mobile.` : 'Enter a name and a 10-digit mobile number.');
+  broadcast();
+  res.json({ ok: true, added: added.length, skipped });
+}));
+app.patch('/api/admin/poll-members/:id', needRole('admin'), ah(async (req, res) => {
+  const b = req.body || {}, id = +req.params.id;
+  if ('name' in b) { const n = str(b.name, 60); if (!n) throw bad('Enter a name.'); await q('UPDATE poll_members SET name=$1 WHERE id=$2', [n, id]); }
+  if ('mobile' in b) {
+    const m = last10(b.mobile); if (m.length !== 10) throw bad('Enter a 10-digit mobile number.');
+    try { await q('UPDATE poll_members SET mobile=$1 WHERE id=$2', [m, id]); } catch (e) { if (e.code === '23505') throw bad('Someone else on the list has that number.'); throw e; }
+  }
+  if ('active' in b) await q('UPDATE poll_members SET active=$1 WHERE id=$2', [!!b.active, id]);
+  broadcast();
+  res.json({ ok: true });
+}));
+app.delete('/api/admin/poll-members/:id', needRole('admin'), ah(async (req, res) => {
+  await q('DELETE FROM poll_members WHERE id=$1', [+req.params.id]);
+  broadcast();
+  res.json({ ok: true });
+}));
+
+// Admin: who is coming, who said no, who hasn't voted, plus recent days.
+app.get('/api/admin/practice', needRole('admin'), ah(async (req, res) => {
+  const s = await getSettings();
+  const w = pollWindow(s);
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.day || '')) ? req.query.day : w.day;
+  const members = await pollMembers(false);
+  const votes = (await q('SELECT voter, name, vote, updated_at FROM practice_votes WHERE day=$1', [day])).rows;
+  const byVoter = new Map(votes.map((v) => [v.voter, v]));
+  const history = (await q("SELECT to_char(day,'YYYY-MM-DD') AS day, count(*) FILTER (WHERE vote='yes')::int AS yes, count(*) FILTER (WHERE vote='no')::int AS no FROM practice_votes GROUP BY day ORDER BY day DESC LIMIT 30")).rows;
+  res.json({
+    ...w, viewDay: day, total: members.length,
+    rows: members.map((m) => { const v = byVoter.get(memberKey(m.id)); return { name: m.name, mobile: prettyMobile(m.mobile), vote: v ? v.vote : null, at: v ? v.updated_at : null }; }),
+    history,
+  });
+}));
+
 // ---------- exports (Excel / PDF) ----------
 async function exportData() {
   const { settings, teams, matches } = await loadAll();
@@ -401,6 +550,13 @@ admin.put('/settings', ah(async (req, res) => {
   for (const k of TEXT_FIELDS) if (k in b) s[k] = str(b[k], 4000);
   if ('regOpen' in b) s.regOpen = !!b.regOpen;
   if ('feeBasis' in b) s.feeBasis = b.feeBasis === 'team' ? 'team' : 'player';
+  if ('practiceEnabled' in b) s.practiceEnabled = !!b.practiceEnabled;
+  if ('practiceFor' in b) s.practiceFor = b.practiceFor === 'tomorrow' ? 'tomorrow' : 'today';
+  if ('practiceCutoff' in b) {
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(String(b.practiceCutoff))) throw bad('Voting closes at must be a time like 20:00.');
+    s.practiceCutoff = b.practiceCutoff;
+  }
+  if ('practiceNote' in b) s.practiceNote = str(b.practiceNote, 300);
   if (b.fees && typeof b.fees === 'object') {
     const fees = {};
     for (const ek of T.EVENT_KEYS) {
@@ -457,6 +613,7 @@ admin.post('/reset', limiter(5, 15 * 60e3), ah(async (req, res) => {
     const n = (await c.query("SELECT (SELECT count(*) FROM registrations)::int AS regs, (SELECT count(*) FROM teams)::int AS teams, (SELECT count(*) FROM matches)::int AS matches")).rows[0];
     await c.query('TRUNCATE matches, registrations, teams RESTART IDENTITY CASCADE');
     if (b.resetViews !== false) await c.query('TRUNCATE page_views, visitors');
+    await c.query('TRUNCATE practice_votes');
     await c.query('DELETE FROM files WHERE NOT (id::text = ANY($1::text[]))', [keepFiles]);
     await c.query("INSERT INTO settings (key, value) VALUES ('tournament', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", [next]);
     return n;
