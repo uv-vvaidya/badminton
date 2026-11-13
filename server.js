@@ -6,6 +6,7 @@ const multer = require('multer');
 const bcrypt = require('bcryptjs');
 const { q, tx, migrate } = require('./lib/db');
 const T = require('./lib/tournament');
+const X = require('./lib/exports');
 
 const PORT = process.env.PORT || 3000;
 const SETUP_TOKEN = process.env.SETUP_TOKEN || '';
@@ -265,6 +266,47 @@ app.get('/api/state', ah(async (req, res) => {
   const officials = {};
   (await q("SELECT id, username, display_name FROM users WHERE role IN ('umpire','scorer')")).rows.forEach((u) => { officials[u.id] = u.display_name || u.username; });
   res.json({ settings: pub, formats, teams, matches, players: regs, standings: computeStandings(teams, matches), eventKeys: T.EVENT_KEYS, categories: T.CATEGORIES, categoryLabels: T.CATEGORY_LABELS, officials, presence: presence(), qualifiers: qualifierMap(settings, teams, matches), startLabels: T.START_LABELS });
+}));
+
+// ---------- exports (Excel / PDF) ----------
+async function exportData() {
+  const { settings, teams, matches } = await loadAll();
+  const formats = {};
+  for (const ek of T.EVENT_KEYS) formats[ek] = T.formatFor(settings, ek);
+  const officials = {};
+  (await q("SELECT id, username, display_name FROM users WHERE role IN ('umpire','scorer','admin')")).rows.forEach((u) => { officials[u.id] = u.display_name || u.username; });
+  return { settings, teams, matches, formats, officials, standings: computeStandings(teams, matches), qualifiers: qualifierMap(settings, teams, matches), categoryLabels: T.CATEGORY_LABELS };
+}
+const slug = (s) => String(s || 'tournament').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'tournament';
+const today = () => new Date().toISOString().slice(0, 10);
+function pickEvents(req, present) {
+  const ev = req.query.event;
+  if (ev && ev !== 'all') { if (!T.EVENT_KEYS.includes(ev)) throw bad('Unknown event.'); return [ev]; }
+  return T.EVENT_KEYS.filter((k) => present.has(k));
+}
+const XLSX_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+// All downloads are admin-only.
+app.get('/api/admin/export/fixtures.:fmt(xlsx|pdf)', needRole('admin'), limiter(30, 60e3), ah(async (req, res) => {
+  const d = await exportData();
+  const events = pickEvents(req, new Set([...d.teams.map((t) => t.event_key), ...d.matches.map((m) => m.event_key)]));
+  const name = `${slug(d.settings.name)}-fixtures-${req.query.event && req.query.event !== 'all' ? slug(req.query.event) : 'all'}-${today()}`;
+  if (req.params.fmt === 'pdf') return X.fixturesPdf(res, d, events, name + '.pdf');
+  const buf = await X.fixturesXlsx(d, events);
+  res.set({ 'Content-Type': XLSX_TYPE, 'Content-Disposition': `attachment; filename="${name}.xlsx"` }).send(Buffer.from(buf));
+}));
+
+// Registrations contain phone numbers, so they are admin-only. ?contacts=0 gives a printable list without them.
+app.get('/api/admin/export/registrations.:fmt(xlsx|pdf)', needRole('admin'), ah(async (req, res) => {
+  const d = await exportData();
+  let regs = (await q('SELECT * FROM registrations ORDER BY event_key, created_at')).rows;
+  if (req.query.status && ['pending', 'approved', 'rejected'].includes(req.query.status)) regs = regs.filter((r) => r.status === req.query.status);
+  const events = pickEvents(req, new Set(regs.map((r) => r.event_key)));
+  regs = regs.filter((r) => events.includes(r.event_key));
+  const name = `${slug(d.settings.name)}-registrations-${req.query.event && req.query.event !== 'all' ? slug(req.query.event) : 'all'}${req.query.status ? '-' + req.query.status : ''}-${today()}`;
+  if (req.params.fmt === 'pdf') return X.registrationsPdf(res, d, regs, events, name + '.pdf', req.query.contacts !== '0');
+  const buf = await X.registrationsXlsx(d, regs, events);
+  res.set({ 'Content-Type': XLSX_TYPE, 'Content-Disposition': `attachment; filename="${name}.xlsx"`, 'Cache-Control': 'private, no-store' }).send(Buffer.from(buf));
 }));
 
 app.get('/api/stream', (req, res) => {

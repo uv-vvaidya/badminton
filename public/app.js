@@ -290,8 +290,12 @@ function renderFixtures() {
   if (!evs.length) { b.innerHTML = '<div class="empty">No entries yet. Fixtures appear here once players register and the committee draws the groups.</div>'; return; }
   const ev = S.fxEvent, f = fmtOf(ev);
   const fmtLine = '<div class="kv" style="margin-bottom:16px"><span>League <b>' + esc(stageLabel(f.league)) + '</b></span><span>Knockout <b>' + esc(stageLabel(f.knockout)) + '</b></span><span>' + koRule(f.knockout) + '</span></div>';
+  const q = (e) => '?event=' + encodeURIComponent(e);
+  const isAdmin = S.user && S.user.role === 'admin';
+  const exportBar = !isAdmin ? '' : '<div class="export-bar"><span>Download</span><a class="btn small" href="/api/admin/export/fixtures.xlsx' + q(ev) + '" download>' + esc(ev) + ' · Excel</a><a class="btn small" href="/api/admin/export/fixtures.pdf' + q(ev) + '" download>' + esc(ev) + ' · PDF</a>' +
+    '<a class="btn small ghost" href="/api/admin/export/fixtures.xlsx?event=all" download>All events · Excel</a><a class="btn small ghost" href="/api/admin/export/fixtures.pdf?event=all" download>All events · PDF</a></div>';
   if (S.fxMode === 'players') { b.innerHTML = playersHtml(ev); return; }
-  if (S.fxMode === 'knockout') { b.innerHTML = fmtLine + bracketHtml(ev); return; }
+  if (S.fxMode === 'knockout') { b.innerHTML = fmtLine + bracketHtml(ev) + exportBar; return; }
   const tm = teamMap();
   const st = D().standings[ev] || {};
   const groups = Object.keys(st).sort();
@@ -306,6 +310,7 @@ function renderFixtures() {
     '</tbody></table></div><p style="font-size:12px;color:var(--muted);margin-top:8px">Green marker: currently in the knockout places. 2 points per win, then wins, game difference, point difference.</p></div>').join('') + '</div>';
   const lg = D().matches.filter((m) => m.event_key === ev && m.stage === 'league');
   if (lg.length) h += '<div class="section" style="margin-top:28px"><div class="section-head"><h2>League matches</h2><span class="chip">' + lg.filter((m) => m.status === 'done').length + ' of ' + lg.length + ' played</span></div><div class="matches">' + lg.map((m) => matchHtml(m, tm)).join('') + '</div></div>';
+  h += exportBar;
   b.innerHTML = h;
 }
 $('#fxMode').addEventListener('click', (e) => { const x = e.target.closest('button'); if (x) { S.fxMode = x.dataset.mode; renderFixtures(); } });
@@ -459,7 +464,10 @@ function adminRegs(p) {
   const F = { all: () => true, pending: (r) => r.status === 'pending', needs: needsPartner, approved: (r) => r.status === 'approved', rejected: (r) => r.status === 'rejected' };
   const list = all.filter(F[S.regFilter]);
   const sel = [...S.selected].filter((id) => list.some((r) => r.id === id));
-  p.innerHTML = '<div class="toolbar" style="margin-bottom:12px"><select id="rEv" aria-label="Event"><option value="">All events</option>' + D().eventKeys.map((k) => '<option ' + (k === S.regEvent ? 'selected' : '') + '>' + esc(k) + '</option>').join('') + '</select><div class="pillbar" id="rf">' +
+  const qs = '?event=' + encodeURIComponent(S.regEvent || 'all') + (['pending', 'approved', 'rejected'].includes(S.regFilter) ? '&status=' + S.regFilter : '');
+  const regExport = '<div class="export-bar" style="margin:0 0 12px"><span>Download ' + esc(S.regEvent || 'all events') + (['pending', 'approved', 'rejected'].includes(S.regFilter) ? ' (' + ({ pending: 'awaiting review', approved: 'confirmed', rejected: 'rejected' }[S.regFilter]) + ')' : '') + '</span>' +
+    '<a class="btn small" href="/api/admin/export/registrations.xlsx' + qs + '" download>Excel</a><a class="btn small" href="/api/admin/export/registrations.pdf' + qs + '" download>PDF with phone numbers</a><a class="btn small ghost" href="/api/admin/export/registrations.pdf' + qs + '&contacts=0" download>PDF for notice board (no phone numbers)</a></div>';
+  p.innerHTML = regExport + '<div class="toolbar" style="margin-bottom:12px"><select id="rEv" aria-label="Event"><option value="">All events</option>' + D().eventKeys.map((k) => '<option ' + (k === S.regEvent ? 'selected' : '') + '>' + esc(k) + '</option>').join('') + '</select><div class="pillbar" id="rf">' +
     [['pending', 'Awaiting review'], ['needs', 'Needs partner'], ['approved', 'Confirmed'], ['rejected', 'Rejected'], ['all', 'All']].map(([k, l]) => '<button aria-pressed="' + (S.regFilter === k) + '" data-f="' + k + '">' + l + ' · ' + all.filter(F[k]).length + '</button>').join('') + '</div></div>' +
     (S.regFilter === 'needs' ? '<div class="toolbar" style="margin-bottom:12px"><button class="btn small primary" id="pairBtn" ' + (sel.length === 2 ? '' : 'disabled') + '>Pair the 2 selected</button><span style="font-size:13px;color:var(--muted)">Tick two players from the same event to make a team.</span></div>' : '') +
     '<div class="card">' + (list.length ? list.map((r) => {
@@ -573,7 +581,8 @@ function adminMatches(p) {
     '<div class="pillbar" id="mMode"><button aria-pressed="' + (mode === 'schedule') + '" data-m="schedule">Schedule</button><button aria-pressed="' + (mode === 'list') + '" data-m="list">Cards</button></div>' +
     '<button class="btn primary small" id="newL">Add league match</button><button class="btn primary small" id="newK">Add knockout match</button></div>' +
     (mode === 'schedule' && ms.length ? '<p style="font-size:13px;color:var(--muted);margin-bottom:10px">Change courts, start times and umpires in the table, then Save schedule. Use Edit or Correct to change sides, format or the result.</p>' : '') + body +
-    (mode === 'schedule' && ms.length ? '<div class="toolbar" style="margin-top:12px"><button class="btn primary" id="saveSched">Save schedule</button><span class="msg" id="schedMsg"></span></div>' : '');
+    (mode === 'schedule' && ms.length ? '<div class="toolbar" style="margin-top:12px"><button class="btn primary" id="saveSched">Save schedule</button><span class="msg" id="schedMsg"></span></div>' : '') +
+    '<div class="export-bar"><span>Download fixtures for ' + esc(S.matchEvent || 'all events') + '</span><a class="btn small" href="/api/admin/export/fixtures.xlsx?event=' + encodeURIComponent(S.matchEvent || 'all') + '" download>Excel</a><a class="btn small" href="/api/admin/export/fixtures.pdf?event=' + encodeURIComponent(S.matchEvent || 'all') + '" download>PDF</a></div>';
   p.querySelector('#mEv').onchange = (e) => { S.matchEvent = e.target.value; renderAdmin(); };
   p.querySelector('#mMode').onclick = (e) => { const x = e.target.closest('button'); if (x) { S.matchMode = x.dataset.m; renderAdmin(); } };
   p.querySelector('#newL').onclick = () => matchEditor(null, 'league');

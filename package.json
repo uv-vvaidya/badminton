@@ -8,11 +8,15 @@
     "start": "node server.js",
     "test": "node test/logic.test.js"
   },
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
     "bcryptjs": "2.4.3",
+    "exceljs": "4.4.0",
     "express": "4.21.2",
     "multer": "2.0.2",
+    "pdfkit": "0.15.2",
     "pg": "8.13.1"
   }
 }

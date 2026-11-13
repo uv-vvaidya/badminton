@@ -280,3 +280,8 @@ table.sched th{text-align:left}
 .amount-due.muted{background:transparent;border-style:dashed;display:block;color:var(--muted)}
 .upi-btn{justify-self:start}
 .fee-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,170px),1fr));gap:10px}
+
+/* exports */
+.export-bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:24px;padding:12px 14px;border:1px dashed var(--line);border-radius:var(--r)}
+.export-bar>span{font-size:13px;font-weight:600;color:var(--muted);margin-right:4px}
+.export-bar .btn.ghost{border-width:1px;color:var(--ink)}
