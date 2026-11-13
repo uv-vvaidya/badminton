@@ -73,6 +73,7 @@ Standings: 2 points per win, then wins, game difference, point difference, head-
 - **Send link** (per person) opens WhatsApp with a personal link that signs them in directly.
 - Each day people vote **Yes, I'm coming** or **No**, and can change it until the cut-off (default **8:00 PM India time**). A new poll opens at midnight.
 - Admins see Coming / Not coming / No answer for each day, with history. Pause or remove people any time.
+- **Share the final list**: after the cut-off, admins get a results card (image) and a ready WhatsApp message. On a phone, **Share on WhatsApp** sends both to the group you pick; on a computer it opens WhatsApp with the text, and **Download image** saves the card. Also available any time in Admin → Practice poll for the day being viewed.
 
 ## Security notes
 

@@ -762,7 +762,10 @@ function renderPractice() {
   const list = (arr) => (arr.length ? '<ul class="names">' + arr.map((n) => '<li>' + esc(n) + '</li>').join('') + '</ul>' : '<p class="sub">Nobody yet.</p>');
   const tally = '<div class="grid-2 poll-tally"><div class="card"><h3>Coming · ' + P.yes.length + '</h3>' + list(P.yes) + '</div><div class="card"><h3>Not coming · ' + P.no.length + '</h3>' + list(P.no) + '</div></div>' +
     '<p class="sub">' + P.notVoted + ' of ' + P.members + (P.members === 1 ? ' person has' : ' people have') + ' not voted yet.</p>';
-  root.innerHTML = head + me + tally;
+  const isAdmin = S.user && S.user.role === 'admin';
+  const r = { day: P.day, note: P.note, yes: P.yes, no: P.no, noAnswer: P.notVoted, closed: !P.open, cutoff: P.cutoff, title: P.title || D().settings.name || 'Practice' };
+  root.innerHTML = head + (P.open ? me : '<div class="card"><h3>Final list</h3><p class="sub">Voting is closed. This is who is coming.</p></div>') + tally + (isAdmin ? shareCard(r, 'pShare') : '');
+  if (isAdmin) bindShareCard(root, r);
   const wf = $('#whoForm');
   if (wf) wf.onsubmit = async (e) => {
     e.preventDefault();
@@ -779,6 +782,75 @@ function renderPractice() {
   practiceTimer = setInterval(() => { if (S.view === 'practice') loadPractice(); else clearInterval(practiceTimer); }, 60000);
 }
 
+// ---------- one-tap result sharing ----------
+// r = { day, note, yes:[names], no:[names], noAnswer, closed, cutoff, title }
+function resultText(r) {
+  const d = new Date(r.day + 'T12:00:00').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' });
+  const lines = [`*${r.title} – Practice ${d}*` + (r.note ? `\n${r.note}` : ''), ''];
+  lines.push(`*Coming (${r.yes.length})*`);
+  lines.push(r.yes.length ? r.yes.map((n, i) => `${i + 1}. ${n}`).join('\n') : '—');
+  lines.push('', `*Not coming (${r.no.length})*`);
+  lines.push(r.no.length ? r.no.join(', ') : '—');
+  lines.push('', `No answer: ${r.noAnswer}`);
+  if (!r.closed) lines.push(`_(Voting still open until ${fmtCut(r.cutoff)}, list may change)_`);
+  return lines.join('\n');
+}
+async function resultImage(r) {
+  try { await document.fonts.ready; } catch (e) { /* ignore */ }
+  const css = getComputedStyle(document.documentElement);
+  const fontD = '"Big Shoulders Display", "Arial Narrow", Impact, sans-serif', fontB = 'Figtree, system-ui, sans-serif';
+  const W = 1080, pad = 64, colW = (W - pad * 3) / 2, lineH = 50;
+  const rows = Math.max(r.yes.length, r.no.length, 1);
+  const H = 360 + rows * lineH + 140;
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const g = c.getContext('2d');
+  g.fillStyle = '#F3F6F2'; g.fillRect(0, 0, W, H);
+  g.fillStyle = '#17533F'; g.fillRect(0, 0, W, 250);
+  g.strokeStyle = 'rgba(255,255,255,.6)'; g.lineWidth = 3; g.strokeRect(24, 24, W - 48, 202);
+  g.fillStyle = '#F2F7F3'; g.font = `600 30px ${fontB}`; g.fillText(r.title.toUpperCase() + ' · PRACTICE', pad, 92);
+  g.font = `900 72px ${fontD}`; g.fillText(fmtDayLong(r.day).toUpperCase(), pad, 172);
+  g.font = `500 28px ${fontB}`; g.fillStyle = 'rgba(242,247,243,.85)'; g.fillText((r.note || '').slice(0, 70), pad, 214);
+  const col = (x, title, color, names, numbered) => {
+    g.fillStyle = color; g.font = `800 40px ${fontD}`; g.fillText(title, x, 320);
+    g.fillRect(x, 334, colW, 4);
+    g.fillStyle = '#0F221C'; g.font = `500 32px ${fontB}`;
+    if (!names.length) { g.fillStyle = '#4F625B'; g.fillText('Nobody', x, 334 + lineH); }
+    names.forEach((n, i) => {
+      let t = (numbered ? `${i + 1}. ` : '') + n;
+      while (g.measureText(t).width > colW && t.length > 4) t = t.slice(0, -2) + '…';
+      g.fillText(t, x, 334 + lineH * (i + 1));
+    });
+  };
+  col(pad, `COMING · ${r.yes.length}`, '#1F7A4A', r.yes, true);
+  col(pad * 2 + colW, `NOT COMING · ${r.no.length}`, '#B4372F', r.no, false);
+  g.fillStyle = '#4F625B'; g.font = `500 28px ${fontB}`;
+  g.fillText(`No answer: ${r.noAnswer}` + (r.closed ? `   ·   Voting closed at ${fmtCut(r.cutoff)}` : `   ·   Voting open until ${fmtCut(r.cutoff)}`), pad, H - 56);
+  return new Promise((res) => c.toBlob((b) => res(b), 'image/png'));
+}
+function shareCard(r, id) {
+  return '<div class="card form share-card" id="' + id + '"><div class="toolbar" style="justify-content:space-between"><h3>' + (r.closed ? 'Share the final list' : 'Share the list so far') + '</h3><span class="chip ' + (r.closed ? 'good' : 'warn') + '">' + (r.closed ? 'Voting closed' : 'Voting open') + '</span></div>' +
+    '<img class="share-preview" alt="Results card preview">' +
+    '<div class="toolbar"><button type="button" class="btn primary" data-sh="share">Share on WhatsApp</button><button type="button" class="btn small" data-sh="text">Copy text</button><button type="button" class="btn small" data-sh="img">Download image</button></div>' +
+    '<p class="sub share-hint">On a phone, Share on WhatsApp sends the image and the list together: pick your group and tap send. On a computer it opens WhatsApp with the list as text; use Download image to attach the picture.</p></div>';
+}
+async function bindShareCard(root, r) {
+  const card = root.querySelector('.share-card'); if (!card) return;
+  const text = resultText(r);
+  const blob = await resultImage(r);
+  const url = URL.createObjectURL(blob);
+  card.querySelector('.share-preview').src = url;
+  const file = new File([blob], `practice-${r.day}.png`, { type: 'image/png' });
+  const canFiles = !!(navigator.canShare && navigator.canShare({ files: [file] }));
+  card.querySelector('[data-sh=share]').onclick = async () => {
+    if (canFiles) {
+      try { await navigator.share({ files: [file], text }); return; } catch (e) { if (e && e.name === 'AbortError') return; }
+    }
+    window.open('https://wa.me/?text=' + encodeURIComponent(text), '_blank', 'noopener');
+  };
+  card.querySelector('[data-sh=text]').onclick = () => navigator.clipboard.writeText(text).then(() => toast('List copied. Paste it in WhatsApp.'), () => toast('Could not copy. Select the list on screen instead.'));
+  card.querySelector('[data-sh=img]').onclick = () => { const a = document.createElement('a'); a.href = url; a.download = file.name; document.body.appendChild(a); a.click(); a.remove(); };
+}
+
 async function adminPractice(p) {
   const c = D().settings;
   p.innerHTML = '<p class="note">Loading…</p>';
@@ -786,6 +858,7 @@ async function adminPractice(p) {
   try { A = await api('/api/admin/practice' + (S.practiceDay ? '?day=' + S.practiceDay : '')); } catch (er) { p.innerHTML = '<p class="note warn">' + esc(er.message) + '</p>'; return; }
   const yes = A.rows.filter((r) => r.vote === 'yes'), no = A.rows.filter((r) => r.vote === 'no'), none = A.rows.filter((r) => !r.vote);
   const names = (arr) => (arr.length ? '<ul class="names">' + arr.map((r) => '<li>' + esc(r.name) + '<span class="sub"> · ' + esc(r.mobile) + '</span></li>').join('') + '</ul>' : '<p class="sub">None.</p>');
+  const shareR = { day: A.viewDay, note: c.practiceNote, yes: yes.map((x) => x.name), no: no.map((x) => x.name), noAnswer: none.length, closed: A.viewDay !== A.day || !A.open, cutoff: A.cutoff, title: c.name || 'Practice' };
   let M = [];
   try { M = await api('/api/admin/poll-members'); } catch (er) { /* shown below as empty */ }
   const base = location.origin + '/';
@@ -810,6 +883,7 @@ async function adminPractice(p) {
     '<div class="toolbar"><button type="button" class="btn primary small" id="memAdd">Add person</button></div>' +
     '<details><summary>Add many at once</summary><label class="f" style="margin-top:8px">One person per line: name, then mobile<textarea id="memBulk" placeholder="Ravi Kumar, 98765 43210&#10;Asha Nair 9900012345"></textarea></label><div class="toolbar"><button type="button" class="btn small" id="memBulkAdd">Add all</button></div></details>' +
     '<p class="sub">"Send link" opens WhatsApp with a personal link that signs that person in directly, so they don\'t need to type their number. Pausing someone hides them from the poll without deleting them.</p></div>' +
+    shareCard(shareR, 'aShare') +
     '<div class="card"><div class="toolbar" style="justify-content:space-between"><h3>' + esc(fmtDayLong(A.viewDay)) + '</h3><span class="chip ' + (A.viewDay === A.day && A.open ? 'good' : '') + '">' + (A.viewDay === A.day ? (A.open ? 'Voting open until ' + esc(fmtCut(A.cutoff)) : 'Voting closed') : 'Past day') + '</span></div>' +
     '<div class="stats" style="margin:10px 0"><div><b class="tab-num">' + yes.length + '</b><span>Coming</span></div><div><b class="tab-num">' + no.length + '</b><span>Not coming</span></div><div><b class="tab-num">' + none.length + '</b><span>No answer</span></div></div>' +
     '<div class="poll-admin"><div><h4>Coming</h4>' + names(yes) + '</div><div><h4>Not coming</h4>' + names(no) + '</div><div><h4>No answer</h4>' + names(none) + '</div></div></div>' +
@@ -834,6 +908,7 @@ async function adminPractice(p) {
     modal('<h3>Edit person</h3><label class="f">Name<input type="text" id="meN" value="' + esc(m.name) + '"></label><label class="f">Mobile<input type="tel" id="meM" value="' + esc(m.mobile) + '"></label><div class="toolbar"><button class="btn primary" id="meS">Save</button><button class="btn" data-close>Cancel</button></div>',
       (md) => { md.querySelector('#meS').onclick = async () => { try { await api('/api/admin/poll-members/' + m.id, { method: 'PATCH', body: { name: md.querySelector('#meN').value, mobile: md.querySelector('#meM').value } }); closeModal(); memReload(); } catch (er) { toast(er.message); } }; });
   }; });
+  bindShareCard(p, shareR);
   $$('[data-pday]', p).forEach((b) => { b.onclick = () => { S.practiceDay = b.dataset.pday === A.day ? null : b.dataset.pday; renderAdmin(); }; });
 }
 

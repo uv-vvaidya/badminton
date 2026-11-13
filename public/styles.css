@@ -309,3 +309,6 @@ table.sched th{text-align:left}
 table.members td{text-align:left;vertical-align:middle}
 table.members th{text-align:left}
 .mem-act{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+
+.share-card{display:grid;gap:12px}
+.share-preview{width:100%;max-width:520px;border-radius:8px;border:1px solid var(--line)}
